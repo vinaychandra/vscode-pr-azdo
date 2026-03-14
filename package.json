@@ -102,6 +102,10 @@
         "command": "vscode-pr-azdo.filterComments",
         "title": "Filter Comments",
         "icon": "$(filter)"
+      },
+      {
+        "command": "vscode-pr-azdo.openFileDiff",
+        "title": "Show Changes"
       }
     ],
     "menus": {

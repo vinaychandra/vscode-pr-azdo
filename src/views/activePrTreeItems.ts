@@ -71,6 +71,13 @@ export class FileChangeItem extends vscode.TreeItem {
         this.resourceUri = vscode.Uri.parse(`file:///${filePath}`);
         this.contextValue = 'activePr.file';
         this.tooltip = `${filePath} (${changeTypeLabel(changeType)})`;
+
+        // Click opens the diff view
+        this.command = {
+            command: 'vscode-pr-azdo.openFileDiff',
+            title: 'Show Changes',
+            arguments: [this],
+        };
     }
 
     /** Call after adding comment threads to update collapsible state. */

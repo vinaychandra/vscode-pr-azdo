@@ -6,9 +6,11 @@ import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
-import type { ActivePrTreeItem } from './views/activePrTreeItems';
+import { FileChangeItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel } from './views/prDetailPanel';
 import { PrCommentController } from './views/prCommentController';
+import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
+import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
@@ -92,6 +94,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Inline comment controller — lives for the extension's lifetime
 	const commentController = new PrCommentController(outputChannel);
 	context.subscriptions.push(commentController);
+
+	// Git ref content provider for diff views
+	const gitContentProvider = new GitRefContentProvider(outputChannel);
+	context.subscriptions.push(
+		vscode.workspace.registerTextDocumentContentProvider(GIT_CONTENT_SCHEME, gitContentProvider),
+	);
 
 	// Stable emitters that the tree views subscribe to once.
 	const proxyEmitter = new vscode.EventEmitter<void>();
@@ -205,6 +213,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
 			activePrProvider?.refresh();
+			gitContentProvider.clearCache();
 		}),
 	);
 
@@ -243,6 +252,50 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 			PrDetailPanel.createOrShow(pr, context.extensionUri, apiClient, detector.currentRemoteInfo, outputChannel);
+		}),
+	);
+
+	// Open file diff for a PR file change
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.openFileDiff', async (item: FileChangeItem) => {
+			const pr = activePrProvider?._activePrForContext;
+			if (!pr) {
+				vscode.window.showWarningMessage('No active pull request.');
+				return;
+			}
+
+			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+			const targetRef = `origin/${targetBranch}`;
+			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+			if (!workspaceRoot) { return; }
+
+			const filePath = item.filePath;
+			const changeType = item.changeType;
+
+			outputChannel.appendLine(`[diff] Opening diff for ${filePath} (${item.description}) against ${targetRef}`);
+
+			let leftUri: vscode.Uri;
+			let rightUri: vscode.Uri;
+			let title: string;
+
+			if (changeType & VersionControlChangeType.Add) {
+				// New file: left is empty, right is working copy
+				leftUri = buildGitRefUri('__empty__', targetRef);
+				rightUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+				title = `${item.fileName} (Added)`;
+			} else if (changeType & VersionControlChangeType.Delete) {
+				// Deleted file: left is target branch, right is empty
+				leftUri = buildGitRefUri(filePath, targetRef);
+				rightUri = buildGitRefUri('__empty__', targetRef);
+				title = `${item.fileName} (Deleted)`;
+			} else {
+				// Edit/Rename/etc: left is target branch, right is working copy
+				leftUri = buildGitRefUri(filePath, targetRef);
+				rightUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+				title = `${item.fileName} (${targetBranch} ↔ Working Copy)`;
+			}
+
+			await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title);
 		}),
 	);
 
