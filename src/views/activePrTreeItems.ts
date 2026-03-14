@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { VersionControlChangeType, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { hasSuggestion, extractSuggestion, extractCommentText } from './suggestionRenderer';
 
 // ---------------------------------------------------------------------------
 // Active PR root
@@ -100,15 +101,31 @@ export class CommentThreadItem extends vscode.TreeItem {
         const firstComment = thread.comments?.find(c => !c.isDeleted && c.commentType !== CommentType.System);
         const author = firstComment?.author?.displayName ?? 'unknown';
         const content = firstComment?.content ?? '(no content)';
-        const truncated = content.length > 80 ? content.substring(0, 77) + '…' : content;
+
+        // For suggestions, show a cleaner label
+        let displayText: string;
+        let tooltipMd: string;
+        if (hasSuggestion(content)) {
+            const commentText = extractCommentText(content);
+            const suggested = extractSuggestion(content) ?? '';
+            displayText = commentText || '💡 Suggestion';
+            tooltipMd = `**${author}** — 💡 Suggestion\n\n`;
+            if (commentText) {
+                tooltipMd += commentText + '\n\n';
+            }
+            tooltipMd += '```diff\n+ ' + suggested.split('\n').join('\n+ ') + '\n```';
+        } else {
+            displayText = content;
+            tooltipMd = `**${author}**\n\n${content}`;
+        }
+
+        const truncated = displayText.length > 80 ? displayText.substring(0, 77) + '…' : displayText;
 
         super(truncated, vscode.TreeItemCollapsibleState.None);
         this.description = author;
-        this.iconPath = new vscode.ThemeIcon('comment');
+        this.iconPath = new vscode.ThemeIcon(hasSuggestion(content) ? 'lightbulb' : 'comment');
         this.contextValue = 'activePr.comment';
-        this.tooltip = new vscode.MarkdownString(
-            `**${author}**\n\n${content}`,
-        );
+        this.tooltip = new vscode.MarkdownString(tooltipMd);
     }
 }
 

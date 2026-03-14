@@ -1,11 +1,7 @@
-import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread, GitPullRequestChange } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import type { GitPullRequestSearchCriteria } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from './apiClient';
 import type { AzDoRemoteInfo } from './remoteInfo';
-
-const MAX_PAGE_SIZE = 100;
-const MAX_ITEMS = 1000;
 
 /**
  * Fetches pull request data from Azure DevOps.

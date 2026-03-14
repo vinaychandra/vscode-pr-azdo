@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import type { GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
 
 /**
  * Manages VS Code inline comments for PR threads.
@@ -34,7 +35,7 @@ export class PrCommentController implements vscode.Disposable {
      * Call this whenever the active PR changes, data is refreshed,
      * or the comment filter changes.
      */
-    updateThreads(threads: GitPullRequestCommentThread[] | undefined): void {
+    async updateThreads(threads: GitPullRequestCommentThread[] | undefined): Promise<void> {
         // Dispose previous VS Code comment threads
         this.disposeThreads();
 
@@ -67,7 +68,7 @@ export class PrCommentController implements vscode.Disposable {
             this.log.appendLine(`[comments]   range: L${range.start.line + 1}:${range.start.character + 1} - L${range.end.line + 1}:${range.end.character + 1}`);
 
             // Build comment objects from the thread's comments
-            const comments = this.buildComments(azdoThread);
+            const comments = await this.buildComments(azdoThread, fileUri, range);
             if (comments.length === 0) {
                 continue;
             }
@@ -100,18 +101,103 @@ export class PrCommentController implements vscode.Disposable {
         );
     }
 
-    private buildComments(thread: GitPullRequestCommentThread): vscode.Comment[] {
+    private async buildComments(
+        thread: GitPullRequestCommentThread,
+        fileUri: vscode.Uri,
+        range: vscode.Range,
+    ): Promise<vscode.Comment[]> {
         const comments = (thread.comments ?? [])
             .filter(c => !c.isDeleted && c.commentType !== CommentType.System);
 
-        return comments.map(c => ({
-            body: new vscode.MarkdownString(c.content ?? ''),
-            mode: vscode.CommentMode.Preview,
-            author: {
-                name: c.author?.displayName ?? 'Unknown',
-            },
-            timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
-        }));
+        // Pre-fetch original text (needed if any comment has a suggestion)
+        let originalLines: string[] | undefined;
+        let replacedLines: string[] | undefined;
+        const needsOriginal = comments.some(c => c.content && hasSuggestion(c.content));
+        if (needsOriginal) {
+            const result = await this.getOriginalAndReplaced(fileUri, range, thread);
+            originalLines = result.original;
+            // replacedLines will be computed per-suggestion below
+        }
+
+        return comments.map(c => {
+            const content = c.content ?? '';
+
+            if (hasSuggestion(content) && originalLines) {
+                const suggested = extractSuggestion(content)!;
+                const commentText = extractCommentText(content);
+
+                // Build the replaced version: full lines with only the selected span swapped
+                replacedLines = this.buildReplacedLines(originalLines, range, suggested);
+                const diffMd = renderSuggestionAsDiff(originalLines, suggested, commentText || undefined, replacedLines);
+
+                const body = new vscode.MarkdownString(diffMd);
+                body.isTrusted = true;
+                return {
+                    body,
+                    mode: vscode.CommentMode.Preview,
+                    author: { name: c.author?.displayName ?? 'Unknown' },
+                    timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+                };
+            }
+
+            return {
+                body: new vscode.MarkdownString(content),
+                mode: vscode.CommentMode.Preview,
+                author: { name: c.author?.displayName ?? 'Unknown' },
+                timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+            };
+        });
+    }
+
+    /**
+     * Read the original lines from a file at the given range.
+     */
+    private async getOriginalAndReplaced(
+        fileUri: vscode.Uri,
+        range: vscode.Range,
+        _thread: GitPullRequestCommentThread,
+    ): Promise<{ original: string[] }> {
+        try {
+            const doc = await vscode.workspace.openTextDocument(fileUri);
+            const lines: string[] = [];
+            for (let i = range.start.line; i <= range.end.line; i++) {
+                if (i < doc.lineCount) {
+                    lines.push(doc.lineAt(i).text);
+                }
+            }
+            return { original: lines };
+        } catch {
+            return { original: [] };
+        }
+    }
+
+    /**
+     * Build the "after" lines by replacing the selected span in the original
+     * lines with the suggestion text.
+     *
+     * The range specifies the exact character span that the suggestion replaces.
+     * We keep the text before the start column on the first line and after the
+     * end column on the last line, and insert the suggestion in between.
+     */
+    private buildReplacedLines(
+        originalLines: string[],
+        range: vscode.Range,
+        suggestion: string,
+    ): string[] {
+        if (originalLines.length === 0) {
+            return suggestion.split('\n');
+        }
+
+        const prefix = originalLines[0].substring(0, range.start.character);
+        const lastLine = originalLines[originalLines.length - 1];
+        const suffix = lastLine.substring(range.end.character);
+
+        const suggestedLines = suggestion.split('\n');
+        // Prepend prefix to first suggested line, append suffix to last
+        suggestedLines[0] = prefix + suggestedLines[0];
+        suggestedLines[suggestedLines.length - 1] = suggestedLines[suggestedLines.length - 1] + suffix;
+
+        return suggestedLines;
     }
 
     private getThreadLabel(thread: GitPullRequestCommentThread): string {
