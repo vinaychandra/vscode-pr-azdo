@@ -9,13 +9,18 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "vscode-pr-azdo.helloWorld",
-        "title": "Hello World"
+        "command": "vscode-pr-azdo.showDetectionStatus",
+        "title": "Azure DevOps PR: Show Detection Status"
       }
     ]
   },

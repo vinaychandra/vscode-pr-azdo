@@ -9,5 +9,8 @@
         "dist": true // set this to false to include "dist" folder in search results
     },
     // Turn off tsc task auto detection since we have the necessary tasks as npm scripts
-    "js/ts.tsc.autoDetect": "on"
+    "js/ts.tsc.autoDetect": "on",
+    "chat.tools.terminal.autoApprove": {
+        "npx tsc": true
+    }
 }

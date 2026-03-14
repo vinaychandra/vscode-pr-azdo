@@ -1,26 +1,72 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
+import { getGitAPI } from './git/gitExtension';
+import { RepositoryDetector } from './azdo/repositoryDetector';
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "vscode-pr-azdo" is now active!');
+export async function activate(context: vscode.ExtensionContext) {
+	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+	context.subscriptions.push(outputChannel);
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('vscode-pr-azdo.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from vscode-pr-azdo!');
-	});
+	outputChannel.appendLine('Azure DevOps PR extension activating…');
 
-	context.subscriptions.push(disposable);
+	const gitApi = await getGitAPI(outputChannel);
+	if (!gitApi) {
+		outputChannel.appendLine('Git extension not available — aborting activation.');
+		return;
+	}
+
+	const detector = new RepositoryDetector(gitApi, outputChannel);
+	context.subscriptions.push(detector);
+
+	// React to detection changes (initial + future repo opens)
+	context.subscriptions.push(
+		detector.onDidChange(info => {
+			void vscode.commands.executeCommand(
+				'setContext',
+				'vscode-pr-azdo:hasAzDoRepo',
+				!!info,
+			);
+
+			if (info) {
+				outputChannel.appendLine(
+					`Detected Azure DevOps repo: org=${info.organization}, project=${info.project}, repo=${info.repositoryName} (remote: ${info.remoteName})`,
+				);
+			} else {
+				outputChannel.appendLine('No Azure DevOps remote detected.');
+			}
+		}),
+	);
+
+	// Set the initial context key based on current state
+	void vscode.commands.executeCommand(
+		'setContext',
+		'vscode-pr-azdo:hasAzDoRepo',
+		!!detector.currentRemoteInfo,
+	);
+
+	if (detector.currentRemoteInfo) {
+		const info = detector.currentRemoteInfo;
+		outputChannel.appendLine(
+			`Detected Azure DevOps repo: org=${info.organization}, project=${info.project}, repo=${info.repositoryName} (remote: ${info.remoteName})`,
+		);
+	} else {
+		outputChannel.appendLine('No Azure DevOps remote detected in current repositories.');
+	}
+
+	// Debug command — invoke via Command Palette: "Azure DevOps PR: Show Detection Status"
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.showDetectionStatus', () => {
+			const info = detector.currentRemoteInfo;
+			if (info) {
+				vscode.window.showInformationMessage(
+					`AzDO detected: org=${info.organization}, project=${info.project}, repo=${info.repositoryName}`,
+				);
+			} else {
+				vscode.window.showWarningMessage('No Azure DevOps remote detected.');
+			}
+		}),
+	);
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate() { }
