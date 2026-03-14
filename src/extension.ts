@@ -8,6 +8,7 @@ import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider'
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import type { ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel } from './views/prDetailPanel';
+import { PrCommentController } from './views/prCommentController';
 import { PullRequestStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
@@ -86,6 +87,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	let treeProviderSub: vscode.Disposable | undefined;
 	let activePrProvider: ActivePrTreeDataProvider | undefined;
 	let activePrProviderSub: vscode.Disposable | undefined;
+	let activePrCommentSub: vscode.Disposable | undefined;
+
+	// Inline comment controller — lives for the extension's lifetime
+	const commentController = new PrCommentController(outputChannel);
+	context.subscriptions.push(commentController);
 
 	// Stable emitters that the tree views subscribe to once.
 	const proxyEmitter = new vscode.EventEmitter<void>();
@@ -101,6 +107,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		treeProviderSub = undefined;
 		activePrProviderSub?.dispose();
 		activePrProviderSub = undefined;
+		activePrCommentSub?.dispose();
+		activePrCommentSub = undefined;
 
 		apiClient?.dispose();
 		apiClient = undefined;
@@ -133,6 +141,10 @@ export async function activate(context: vscode.ExtensionContext) {
 				);
 				activePrProxyEmitter.fire();
 			});
+			// Update inline comments only after threads are actually loaded
+			activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
+				commentController.updateThreads(activePrProvider?.filteredThreads);
+			});
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
 		}
@@ -141,6 +153,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		proxyEmitter.fire();
 		activePrProxyEmitter.fire();
 		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', false);
+		commentController.updateThreads(undefined); // Clear inline comments
 	}
 
 	// Build API client when repo info changes

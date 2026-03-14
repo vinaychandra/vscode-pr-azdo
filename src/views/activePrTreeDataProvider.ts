@@ -26,6 +26,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+    private readonly _onDidUpdateComments = new vscode.EventEmitter<void>();
+    /** Fires after threads are loaded/filtered — use this to update inline comments. */
+    readonly onDidUpdateComments = this._onDidUpdateComments.event;
+
     private readonly _disposables: vscode.Disposable[] = [];
 
     private _activePr: GitPullRequest | undefined;
@@ -40,6 +44,17 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         return this._activePr;
     }
 
+    /** Expose cached threads for the comment controller. */
+    get allThreads(): GitPullRequestCommentThread[] | undefined {
+        return this._allThreads;
+    }
+
+    /** Get threads filtered by the current comment filter. */
+    get filteredThreads(): GitPullRequestCommentThread[] {
+        if (!this._allThreads || this._commentFilter === 'hidden') { return []; }
+        return this.applyThreadFilter(this._allThreads);
+    }
+
     get commentFilter(): CommentFilter {
         return this._commentFilter;
     }
@@ -49,6 +64,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         // Rebuild tree items from cached data (no re-fetch)
         this.rebuildCommentsFromCache();
         this._onDidChangeTreeData.fire();
+        this._onDidUpdateComments.fire();
     }
 
     constructor(
@@ -217,6 +233,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             // Always fetch threads (cached until refresh)
             await this.loadThreads(prId);
             this.rebuildCommentsFromCache();
+            this._onDidUpdateComments.fire();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error loading data: ${msg}`);
@@ -346,6 +363,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     dispose(): void {
         this._onDidChangeTreeData.dispose();
+        this._onDidUpdateComments.dispose();
         for (const d of this._disposables) {
             d.dispose();
         }
