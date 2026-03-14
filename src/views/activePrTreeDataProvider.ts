@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import type { GitPullRequest, GitCommitRef, GitPullRequestChange } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
 import type { API } from '../typings/git';
 import {
@@ -7,10 +8,13 @@ import {
     SectionHeaderItem,
     FolderItem,
     FileChangeItem,
+    CommentThreadItem,
     CommitItem,
     buildFileTree,
     type ActivePrTreeItem,
 } from './activePrTreeItems';
+
+export type CommentFilter = 'active' | 'all' | 'hidden';
 
 /**
  * Provides data for the "Active Pull Request" tree view.
@@ -27,10 +31,24 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _activePr: GitPullRequest | undefined;
     private _fileTree: (FolderItem | FileChangeItem)[] | undefined;
     private _commits: GitCommitRef[] | undefined;
+    /** All user-visible threads (cached from API, never cleared by filter change). */
+    private _allThreads: GitPullRequestCommentThread[] | undefined;
+    private _commentFilter: CommentFilter = 'active';
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
         return this._activePr;
+    }
+
+    get commentFilter(): CommentFilter {
+        return this._commentFilter;
+    }
+
+    setCommentFilter(filter: CommentFilter): void {
+        this._commentFilter = filter;
+        // Rebuild tree items from cached data (no re-fetch)
+        this.rebuildCommentsFromCache();
+        this._onDidChangeTreeData.fire();
     }
 
     constructor(
@@ -86,6 +104,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     refresh(): void {
         this._fileTree = undefined;
         this._commits = undefined;
+        this._allThreads = undefined;
         this._activePr = undefined;
         void this.detectActivePr();
     }
@@ -96,6 +115,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         if (changed) {
             this._fileTree = undefined;
             this._commits = undefined;
+            this._allThreads = undefined;
         }
         this._onDidChangeTreeData.fire();
     }
@@ -133,10 +153,16 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             ];
         }
 
-        // Files section → folder tree
+        // Files section → filtered PR-level comments + folder tree
         if (element instanceof SectionHeaderItem && element.section === 'files') {
             await this.ensureData();
-            return this._fileTree ?? [];
+            const items: ActivePrTreeItem[] = [];
+            if (this._commentFilter !== 'hidden') {
+                const prComments = this.getFilteredPrLevelComments();
+                items.push(...prComments);
+            }
+            items.push(...(this._fileTree ?? []));
+            return items;
         }
 
         // Commits section → commit items
@@ -150,11 +176,19 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             return element.children;
         }
 
+        // File → comment threads (if not hidden)
+        if (element instanceof FileChangeItem) {
+            if (this._commentFilter !== 'hidden') {
+                return this.getFilteredFileComments(element);
+            }
+            return [];
+        }
+
         return [];
     }
 
     /**
-     * Ensure files and commits data are loaded. Returns [fileCount, commitCount].
+     * Ensure files, commits, and comments data are loaded. Returns [fileCount, commitCount].
      */
     private async ensureData(): Promise<[number, number]> {
         if (this._fileTree && this._commits) {
@@ -179,14 +213,123 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
             this._commits = await this.prService.getPrCommits(prId);
             this.log.appendLine(`[active-pr] Loaded ${this._commits.length} commit(s)`);
+
+            // Always fetch threads (cached until refresh)
+            await this.loadThreads(prId);
+            this.rebuildCommentsFromCache();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error loading data: ${msg}`);
             this._fileTree = this._fileTree ?? [];
             this._commits = this._commits ?? [];
+            this._allThreads = this._allThreads ?? [];
         }
 
         return [this.countFiles(this._fileTree), this._commits.length];
+    }
+
+    /** Fetch all threads once and cache them. */
+    private async loadThreads(prId: number): Promise<void> {
+        if (this._allThreads) { return; }
+
+        const threads = await this.prService.getPrThreads(prId);
+        this.log.appendLine(`[active-pr] Loaded ${threads.length} comment thread(s)`);
+
+        // Keep only non-deleted threads with at least one user comment
+        this._allThreads = threads.filter(t => {
+            if (t.isDeleted) { return false; }
+            return t.comments?.some(
+                c => !c.isDeleted && c.commentType !== CommentType.System,
+            );
+        });
+        this.log.appendLine(`[active-pr] ${this._allThreads.length} user thread(s) after filtering system/deleted`);
+    }
+
+    /** Apply the current filter to cached threads and attach to the file tree. */
+    private rebuildCommentsFromCache(): void {
+        if (!this._allThreads || !this._fileTree) { return; }
+
+        // Clear existing comment attachments
+        this.clearComments(this._fileTree);
+
+        if (this._commentFilter === 'hidden') { return; }
+
+        const filtered = this.applyThreadFilter(this._allThreads);
+
+        // Partition: file-level vs PR-level
+        const byFile = new Map<string, GitPullRequestCommentThread[]>();
+
+        for (const thread of filtered) {
+            const filePath = thread.threadContext?.filePath;
+            if (filePath) {
+                const normalized = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+                if (!byFile.has(normalized)) {
+                    byFile.set(normalized, []);
+                }
+                byFile.get(normalized)!.push(thread);
+            }
+        }
+
+        // Attach to file items
+        this.attachCommentsToFiles(this._fileTree, byFile);
+    }
+
+    private applyThreadFilter(threads: GitPullRequestCommentThread[]): GitPullRequestCommentThread[] {
+        if (this._commentFilter === 'all') {
+            return threads;
+        }
+        // 'active' — only threads that are not resolved/closed
+        return threads.filter(t => {
+            const status = t.status;
+            return status === undefined
+                || status === CommentThreadStatus.Unknown
+                || status === CommentThreadStatus.Active
+                || status === CommentThreadStatus.Pending;
+        });
+    }
+
+    /** Get filtered PR-level comments (threads with no file context). */
+    private getFilteredPrLevelComments(): CommentThreadItem[] {
+        if (!this._allThreads) { return []; }
+        const filtered = this.applyThreadFilter(this._allThreads);
+        return filtered
+            .filter(t => !t.threadContext?.filePath)
+            .map(t => new CommentThreadItem(t));
+    }
+
+    /** Get filtered comments for a specific file. */
+    private getFilteredFileComments(file: FileChangeItem): CommentThreadItem[] {
+        return file.commentThreads;
+    }
+
+    private clearComments(nodes: (FolderItem | FileChangeItem)[]): void {
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                node.commentThreads.length = 0;
+                node.collapsibleState = vscode.TreeItemCollapsibleState.None;
+            } else if (node instanceof FolderItem) {
+                this.clearComments(node.children);
+            }
+        }
+    }
+
+    private attachCommentsToFiles(
+        nodes: (FolderItem | FileChangeItem)[],
+        byFile: Map<string, GitPullRequestCommentThread[]>,
+    ): void {
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                const threads = byFile.get(node.filePath);
+                if (threads) {
+                    for (const t of threads) {
+                        node.commentThreads.push(new CommentThreadItem(t));
+                    }
+                    node.finalizeComments();
+                }
+            } else if (node instanceof FolderItem) {
+                this.attachCommentsToFiles(node.children, byFile);
+            }
+        }
     }
 
     private countFiles(nodes: (FolderItem | FileChangeItem)[]): number {

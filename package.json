@@ -97,6 +97,11 @@
         "command": "vscode-pr-azdo.checkoutPullRequest",
         "title": "Checkout Branch",
         "icon": "$(arrow-down)"
+      },
+      {
+        "command": "vscode-pr-azdo.filterComments",
+        "title": "Filter Comments",
+        "icon": "$(filter)"
       }
     ],
     "menus": {
@@ -108,6 +113,11 @@
         },
         {
           "command": "vscode-pr-azdo.refreshActivePr",
+          "when": "view == azdo-pr.activePr",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.filterComments",
           "when": "view == azdo-pr.activePr",
           "group": "navigation"
         }

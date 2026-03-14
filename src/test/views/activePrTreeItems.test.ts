@@ -7,9 +7,10 @@ import {
     ActivePrRootItem,
     SectionHeaderItem,
     CommitItem,
+    CommentThreadItem,
 } from '../../views/activePrTreeItems';
-import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import type { GitPullRequestChange, GitCommitRef } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { VersionControlChangeType, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequestChange, GitCommitRef, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import * as vscode from 'vscode';
 
 // Helper to create a fake change
@@ -206,5 +207,85 @@ suite('FileChangeItem', () => {
         assert.strictEqual(item.label, 'foo.ts');
         assert.strictEqual(item.description, 'Edit');
         assert.strictEqual(item.filePath, 'src/foo.ts');
+    });
+
+    test('starts as non-collapsible with no comments', () => {
+        const item = new FileChangeItem('foo.ts', 'src/foo.ts', VersionControlChangeType.Edit);
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.None);
+        assert.strictEqual(item.commentThreads.length, 0);
+    });
+
+    test('becomes collapsible after adding comments and finalizing', () => {
+        const item = new FileChangeItem('foo.ts', 'src/foo.ts', VersionControlChangeType.Edit);
+        item.commentThreads.push(new CommentThreadItem({
+            comments: [{ content: 'test', author: { displayName: 'A' } }],
+        } as any));
+        item.finalizeComments();
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    });
+});
+
+suite('CommentThreadItem', () => {
+    function makeThread(overrides: Partial<GitPullRequestCommentThread> = {}): GitPullRequestCommentThread {
+        return {
+            comments: [
+                { content: 'This looks wrong', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+            ],
+            ...overrides,
+        } as any;
+    }
+
+    test('shows first comment content and author', () => {
+        const item = new CommentThreadItem(makeThread());
+        assert.strictEqual(item.label, 'This looks wrong');
+        assert.strictEqual(item.description, 'Alice');
+    });
+
+    test('truncates long content at 80 chars', () => {
+        const longContent = 'A'.repeat(100);
+        const item = new CommentThreadItem(makeThread({
+            comments: [{ content: longContent, author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false }],
+        } as any));
+        assert.ok((item.label as string).length <= 80);
+        assert.ok((item.label as string).endsWith('…'));
+    });
+
+    test('skips system comments and shows first user comment', () => {
+        const item = new CommentThreadItem(makeThread({
+            comments: [
+                { content: 'System msg', author: { displayName: 'System' }, commentType: CommentType.System, isDeleted: false },
+                { content: 'User msg', author: { displayName: 'Carol' }, commentType: CommentType.Text, isDeleted: false },
+            ],
+        } as any));
+        assert.strictEqual(item.label, 'User msg');
+        assert.strictEqual(item.description, 'Carol');
+    });
+
+    test('skips deleted comments', () => {
+        const item = new CommentThreadItem(makeThread({
+            comments: [
+                { content: 'Deleted', author: { displayName: 'X' }, commentType: CommentType.Text, isDeleted: true },
+                { content: 'Visible', author: { displayName: 'Y' }, commentType: CommentType.Text, isDeleted: false },
+            ],
+        } as any));
+        assert.strictEqual(item.label, 'Visible');
+    });
+
+    test('handles thread with no valid comments', () => {
+        const item = new CommentThreadItem(makeThread({ comments: [] }));
+        assert.strictEqual(item.label, '(no content)');
+        assert.strictEqual(item.description, 'unknown');
+    });
+
+    test('uses comment icon', () => {
+        const item = new CommentThreadItem(makeThread());
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'comment');
+    });
+
+    test('stores thread reference', () => {
+        const thread = makeThread();
+        const item = new CommentThreadItem(thread);
+        assert.strictEqual(item.thread, thread);
     });
 });

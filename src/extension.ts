@@ -195,6 +195,33 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// Filter comments in active PR view
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.filterComments', async () => {
+			if (!activePrProvider) { return; }
+			const current = activePrProvider.commentFilter;
+			const items: vscode.QuickPickItem[] = [
+				{ label: '$(comment) Active Comments', description: 'Show only active/pending threads', detail: current === 'active' ? '(current)' : undefined },
+				{ label: '$(comment-discussion) All Comments', description: 'Show all threads including resolved', detail: current === 'all' ? '(current)' : undefined },
+				{ label: '$(eye-closed) Hide Comments', description: 'Hide all comment threads', detail: current === 'hidden' ? '(current)' : undefined },
+			];
+			const picked = await vscode.window.showQuickPick(items, {
+				placeHolder: 'Filter comment threads',
+			});
+			if (!picked) { return; }
+			const filterMap: Record<string, 'active' | 'all' | 'hidden'> = {
+				'$(comment) Active Comments': 'active',
+				'$(comment-discussion) All Comments': 'all',
+				'$(eye-closed) Hide Comments': 'hidden',
+			};
+			const filter = filterMap[picked.label];
+			if (filter) {
+				activePrProvider.setCommentFilter(filter);
+				outputChannel.appendLine(`[ext] Comment filter set to: ${filter}`);
+			}
+		}),
+	);
+
 	// Open PR detail webview
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', (pr: GitPullRequest) => {

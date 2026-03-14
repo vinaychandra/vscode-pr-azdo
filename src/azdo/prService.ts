@@ -1,7 +1,11 @@
-import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread, GitPullRequestChange } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequestSearchCriteria } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from './apiClient';
 import type { AzDoRemoteInfo } from './remoteInfo';
+
+const MAX_PAGE_SIZE = 100;
+const MAX_ITEMS = 1000;
 
 /**
  * Fetches pull request data from Azure DevOps.
@@ -87,6 +91,16 @@ export class PullRequestService {
     async getPrCommits(pullRequestId: number): Promise<GitCommitRef[]> {
         const git = await this.apiClient.getGitApi();
         return git.getPullRequestCommits(
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            this.remoteInfo.project,
+        );
+    }
+
+    /** Get all comment threads for a pull request. */
+    async getPrThreads(pullRequestId: number): Promise<GitPullRequestCommentThread[]> {
+        const git = await this.apiClient.getGitApi();
+        return git.getThreads(
             this.remoteInfo.repositoryName,
             pullRequestId,
             this.remoteInfo.project,

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { GitPullRequest, GitCommitRef, GitPullRequestChange } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { VersionControlChangeType, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 // ---------------------------------------------------------------------------
 // Active PR root
@@ -58,6 +58,8 @@ export class FolderItem extends vscode.TreeItem {
 }
 
 export class FileChangeItem extends vscode.TreeItem {
+    readonly commentThreads: CommentThreadItem[] = [];
+
     constructor(
         public readonly fileName: string,
         public readonly filePath: string,
@@ -69,6 +71,37 @@ export class FileChangeItem extends vscode.TreeItem {
         this.resourceUri = vscode.Uri.parse(`file:///${filePath}`);
         this.contextValue = 'activePr.file';
         this.tooltip = `${filePath} (${changeTypeLabel(changeType)})`;
+    }
+
+    /** Call after adding comment threads to update collapsible state. */
+    finalizeComments(): void {
+        if (this.commentThreads.length > 0) {
+            this.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comment thread node
+// ---------------------------------------------------------------------------
+
+/**
+ * Represents the first comment of a thread on a file or at PR level.
+ */
+export class CommentThreadItem extends vscode.TreeItem {
+    constructor(public readonly thread: GitPullRequestCommentThread) {
+        const firstComment = thread.comments?.find(c => !c.isDeleted && c.commentType !== CommentType.System);
+        const author = firstComment?.author?.displayName ?? 'unknown';
+        const content = firstComment?.content ?? '(no content)';
+        const truncated = content.length > 80 ? content.substring(0, 77) + '…' : content;
+
+        super(truncated, vscode.TreeItemCollapsibleState.None);
+        this.description = author;
+        this.iconPath = new vscode.ThemeIcon('comment');
+        this.contextValue = 'activePr.comment';
+        this.tooltip = new vscode.MarkdownString(
+            `**${author}**\n\n${content}`,
+        );
     }
 }
 
@@ -97,6 +130,7 @@ export type ActivePrTreeItem =
     | SectionHeaderItem
     | FolderItem
     | FileChangeItem
+    | CommentThreadItem
     | CommitItem;
 
 // ---------------------------------------------------------------------------
