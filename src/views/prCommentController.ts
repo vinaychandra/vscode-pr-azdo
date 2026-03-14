@@ -27,6 +27,12 @@ export class PrCommentController implements vscode.Disposable {
     private _prService: PullRequestService | undefined;
     private _prId: number | undefined;
 
+    /** When false, the "+" gutter and inline threads are suppressed. */
+    private _reviewMode = false;
+
+    /** The last set of threads passed to updateThreads (kept for re-apply on mode change). */
+    private _lastThreads: GitPullRequestCommentThread[] | undefined;
+
     /** Fires after a comment action so the tree/provider can refresh. */
     private readonly _onDidPerformAction = new vscode.EventEmitter<void>();
     readonly onDidPerformAction = this._onDidPerformAction.event;
@@ -60,6 +66,9 @@ export class PrCommentController implements vscode.Disposable {
                 if (scheme !== 'file' && scheme !== GIT_CONTENT_SCHEME) {
                     return [];
                 }
+                if (!this._reviewMode) {
+                    return [];
+                }
                 if (!this._prService || !this._prId) {
                     this.log.appendLine(`[comments] provideCommentingRanges: no PR context — returning [] for ${document.uri.toString()}`);
                     return [];
@@ -72,6 +81,20 @@ export class PrCommentController implements vscode.Disposable {
                 return [];
             },
         };
+    }
+
+    /** Enable or disable review mode (controls gutter "+" and inline threads). */
+    setReviewMode(on: boolean): void {
+        if (this._reviewMode === on) { return; }
+        this._reviewMode = on;
+        this.log.appendLine(`[comments] setReviewMode: ${on}`);
+        this.applyCommentingRangeProvider();
+        // Re-apply cached threads: show them if ON, hide if OFF
+        void this.updateThreads(this._lastThreads);
+    }
+
+    get reviewMode(): boolean {
+        return this._reviewMode;
     }
 
     /** Set the PR context for write operations. */
@@ -254,8 +277,16 @@ export class PrCommentController implements vscode.Disposable {
      * or the comment filter changes.
      */
     async updateThreads(threads: GitPullRequestCommentThread[] | undefined): Promise<void> {
+        // Cache the threads so we can re-apply when review mode toggles
+        this._lastThreads = threads;
+
         // Dispose previous VS Code comment threads
         this.disposeThreads();
+
+        if (!this._reviewMode) {
+            this.log.appendLine('[comments] Review mode OFF — not displaying threads');
+            return;
+        }
 
         if (!threads || threads.length === 0) {
             this.log.appendLine('[comments] No threads to display');

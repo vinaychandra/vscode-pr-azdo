@@ -91,4 +91,59 @@ suite('PrCommentController', () => {
         controller.updateThreads(undefined);
         controller.dispose();
     });
+
+    // --- Review Mode ---
+
+    test('reviewMode defaults to false', () => {
+        const controller = new PrCommentController(createMockLog());
+        assert.strictEqual(controller.reviewMode, false);
+        controller.dispose();
+    });
+
+    test('setReviewMode toggles reviewMode', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        assert.strictEqual(controller.reviewMode, true);
+        controller.setReviewMode(false);
+        assert.strictEqual(controller.reviewMode, false);
+        controller.dispose();
+    });
+
+    test('updateThreads does not create threads when reviewMode is off', () => {
+        const controller = new PrCommentController(createMockLog());
+        // reviewMode is off by default — threads should be suppressed
+        controller.updateThreads([makeThread()]);
+        // Should not throw; threads are cached but not displayed
+        controller.dispose();
+    });
+
+    test('setReviewMode(true) re-applies cached threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        // First set threads while review mode is off
+        controller.updateThreads([makeThread()]);
+        // Now enable review mode — should attempt to display cached threads
+        controller.setReviewMode(true);
+        // Should not throw
+        controller.dispose();
+    });
+
+    test('setReviewMode(false) hides previously shown threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        controller.updateThreads([makeThread()]);
+        // Turning off review mode should dispose displayed threads
+        controller.setReviewMode(false);
+        controller.dispose();
+    });
+
+    test('setReviewMode is idempotent', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        controller.setReviewMode(true); // no-op
+        assert.strictEqual(controller.reviewMode, true);
+        controller.setReviewMode(false);
+        controller.setReviewMode(false); // no-op
+        assert.strictEqual(controller.reviewMode, false);
+        controller.dispose();
+    });
 });

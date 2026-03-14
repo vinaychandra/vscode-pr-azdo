@@ -14,7 +14,7 @@ import {
     type ActivePrTreeItem,
 } from './activePrTreeItems';
 
-export type CommentFilter = 'active' | 'all' | 'hidden';
+export type CommentFilter = 'active' | 'all';
 
 /**
  * Provides data for the "Active Pull Request" tree view.
@@ -38,6 +38,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     /** All user-visible threads (cached from API, never cleared by filter change). */
     private _allThreads: GitPullRequestCommentThread[] | undefined;
     private _commentFilter: CommentFilter = 'active';
+    private _reviewMode = false;
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
@@ -51,7 +52,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     /** Get threads filtered by the current comment filter. */
     get filteredThreads(): GitPullRequestCommentThread[] {
-        if (!this._allThreads || this._commentFilter === 'hidden') { return []; }
+        if (!this._allThreads || !this._reviewMode) { return []; }
         return this.applyThreadFilter(this._allThreads);
     }
 
@@ -83,6 +84,20 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this.rebuildCommentsFromCache();
         this._onDidChangeTreeData.fire();
         this._onDidUpdateComments.fire();
+    }
+
+    /** Enable or disable review mode. When OFF, comments are hidden everywhere. */
+    setReviewMode(on: boolean): void {
+        if (this._reviewMode === on) { return; }
+        this._reviewMode = on;
+        this.log.appendLine(`[active-pr] setReviewMode: ${on}`);
+        this.rebuildCommentsFromCache();
+        this._onDidChangeTreeData.fire();
+        this._onDidUpdateComments.fire();
+    }
+
+    get reviewMode(): boolean {
+        return this._reviewMode;
     }
 
     constructor(
@@ -191,7 +206,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         if (element instanceof SectionHeaderItem && element.section === 'files') {
             await this.ensureData();
             const items: ActivePrTreeItem[] = [];
-            if (this._commentFilter !== 'hidden') {
+            if (this._reviewMode) {
                 const prComments = this.getFilteredPrLevelComments();
                 items.push(...prComments);
             }
@@ -210,9 +225,9 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             return element.children;
         }
 
-        // File → comment threads (if not hidden)
+        // File → comment threads (if review mode is on)
         if (element instanceof FileChangeItem) {
-            if (this._commentFilter !== 'hidden') {
+            if (this._reviewMode) {
                 return this.getFilteredFileComments(element);
             }
             return [];
@@ -287,7 +302,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         // Clear existing comment attachments
         this.clearComments(this._fileTree);
 
-        if (this._commentFilter === 'hidden') { return; }
+        if (!this._reviewMode) { return; }
 
         const filtered = this.applyThreadFilter(this._allThreads);
 

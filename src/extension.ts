@@ -95,6 +95,44 @@ export async function activate(context: vscode.ExtensionContext) {
 	const commentController = new PrCommentController(outputChannel);
 	context.subscriptions.push(commentController);
 
+	// --- Review Mode ---
+	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
+
+	const reviewModeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	reviewModeStatusBar.command = 'vscode-pr-azdo.toggleReviewMode';
+	context.subscriptions.push(reviewModeStatusBar);
+
+	function updateReviewModeUi(hasActivePr: boolean): void {
+		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:reviewMode', reviewMode);
+		if (reviewMode) {
+			reviewModeStatusBar.text = '$(eye) Reviewing';
+			reviewModeStatusBar.tooltip = 'Review Mode ON — click to hide comments';
+		} else {
+			reviewModeStatusBar.text = '$(eye-closed) Review';
+			reviewModeStatusBar.tooltip = 'Review Mode OFF — click to show comments';
+		}
+		if (hasActivePr) {
+			reviewModeStatusBar.show();
+		} else {
+			reviewModeStatusBar.hide();
+		}
+	}
+
+	function applyReviewMode(): void {
+		commentController.setReviewMode(reviewMode);
+		activePrProvider?.setReviewMode(reviewMode);
+		updateReviewModeUi(!!activePrProvider?._activePrForContext);
+	}
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.toggleReviewMode', () => {
+			reviewMode = !reviewMode;
+			void context.workspaceState.update('reviewMode', reviewMode);
+			outputChannel.appendLine(`[ext] Review mode toggled: ${reviewMode}`);
+			applyReviewMode();
+		}),
+	);
+
 	// Git ref content provider for diff views
 	const gitContentProvider = new GitRefContentProvider(outputChannel);
 	context.subscriptions.push(
@@ -144,9 +182,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				proxyEmitter.fire();
 			});
 			activePrProviderSub = activePrProvider.onDidChangeTreeData(() => {
+				const hasActivePr = !!activePrProvider?._activePrForContext;
 				void vscode.commands.executeCommand(
-					'setContext', 'vscode-pr-azdo:hasActivePr', !!activePrProvider?._activePrForContext,
+					'setContext', 'vscode-pr-azdo:hasActivePr', hasActivePr,
 				);
+				updateReviewModeUi(hasActivePr);
 				activePrProxyEmitter.fire();
 			});
 			// Update inline comments only after threads are actually loaded
@@ -169,6 +209,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', false);
 		commentController.setPrContext(undefined, undefined);
 		commentController.updateThreads(undefined); // Clear inline comments
+		applyReviewMode();
 	}
 
 	// Build API client when repo info changes
@@ -232,16 +273,14 @@ export async function activate(context: vscode.ExtensionContext) {
 			const items: vscode.QuickPickItem[] = [
 				{ label: '$(comment) Active Comments', description: 'Show only active/pending threads', detail: current === 'active' ? '(current)' : undefined },
 				{ label: '$(comment-discussion) All Comments', description: 'Show all threads including resolved', detail: current === 'all' ? '(current)' : undefined },
-				{ label: '$(eye-closed) Hide Comments', description: 'Hide all comment threads', detail: current === 'hidden' ? '(current)' : undefined },
 			];
 			const picked = await vscode.window.showQuickPick(items, {
 				placeHolder: 'Filter comment threads',
 			});
 			if (!picked) { return; }
-			const filterMap: Record<string, 'active' | 'all' | 'hidden'> = {
+			const filterMap: Record<string, 'active' | 'all'> = {
 				'$(comment) Active Comments': 'active',
 				'$(comment-discussion) All Comments': 'all',
-				'$(eye-closed) Hide Comments': 'hidden',
 			};
 			const filter = filterMap[picked.label];
 			if (filter) {

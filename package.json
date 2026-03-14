@@ -99,6 +99,11 @@
         "icon": "$(arrow-down)"
       },
       {
+        "command": "vscode-pr-azdo.toggleReviewMode",
+        "title": "Toggle Review Mode",
+        "icon": "$(eye)"
+      },
+      {
         "command": "vscode-pr-azdo.filterComments",
         "title": "Filter Comments",
         "icon": "$(filter)"
@@ -142,8 +147,13 @@
           "group": "navigation"
         },
         {
-          "command": "vscode-pr-azdo.filterComments",
+          "command": "vscode-pr-azdo.toggleReviewMode",
           "when": "view == azdo-pr.activePr",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.filterComments",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:reviewMode",
           "group": "navigation"
         }
       ],
