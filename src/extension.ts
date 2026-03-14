@@ -5,6 +5,8 @@ import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
+import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
+import type { ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel } from './views/prDetailPanel';
 import { PullRequestStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
@@ -82,24 +84,31 @@ export async function activate(context: vscode.ExtensionContext) {
 	let prService: PullRequestService | undefined;
 	let treeProvider: PrTreeDataProvider | undefined;
 	let treeProviderSub: vscode.Disposable | undefined;
+	let activePrProvider: ActivePrTreeDataProvider | undefined;
+	let activePrProviderSub: vscode.Disposable | undefined;
 
-	// Stable emitter that the tree view subscribes to once.
-	// We forward events from whichever PrTreeDataProvider is current.
+	// Stable emitters that the tree views subscribe to once.
 	const proxyEmitter = new vscode.EventEmitter<void>();
 	context.subscriptions.push(proxyEmitter);
+	const activePrProxyEmitter = new vscode.EventEmitter<void>();
+	context.subscriptions.push(activePrProxyEmitter);
 
 	function rebuildApiClient(): void {
 		outputChannel.appendLine('[ext] rebuildApiClient called');
 
-		// Tear down previous provider subscription
+		// Tear down previous provider subscriptions
 		treeProviderSub?.dispose();
 		treeProviderSub = undefined;
+		activePrProviderSub?.dispose();
+		activePrProviderSub = undefined;
 
 		apiClient?.dispose();
 		apiClient = undefined;
 		prService = undefined;
 		treeProvider?.dispose();
 		treeProvider = undefined;
+		activePrProvider?.dispose();
+		activePrProvider = undefined;
 
 		const info = detector.currentRemoteInfo;
 		if (info) {
@@ -111,18 +120,27 @@ export async function activate(context: vscode.ExtensionContext) {
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel);
 			context.subscriptions.push(treeProvider);
 
-			// Forward real provider's change events through the stable proxy emitter
+			activePrProvider = new ActivePrTreeDataProvider(prService, gitApi!, outputChannel);
+			context.subscriptions.push(activePrProvider);
+
+			// Forward real provider's change events through stable proxy emitters
 			treeProviderSub = treeProvider.onDidChangeTreeData(() => {
-				outputChannel.appendLine('[ext] treeProvider fired onDidChangeTreeData → forwarding to tree view');
 				proxyEmitter.fire();
 			});
+			activePrProviderSub = activePrProvider.onDidChangeTreeData(() => {
+				void vscode.commands.executeCommand(
+					'setContext', 'vscode-pr-azdo:hasActivePr', !!activePrProvider?._activePrForContext,
+				);
+				activePrProxyEmitter.fire();
+			});
 		} else {
-			outputChannel.appendLine('[ext] No remote info — tree provider not created');
+			outputChannel.appendLine('[ext] No remote info — tree providers not created');
 		}
 
-		// Tell the tree view to re-query (shows welcome view or categories)
-		outputChannel.appendLine('[ext] Firing proxy emitter to refresh tree view');
+		// Tell both tree views to re-query
 		proxyEmitter.fire();
+		activePrProxyEmitter.fire();
+		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', false);
 	}
 
 	// Build API client when repo info changes
@@ -155,6 +173,28 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// --- Active PR tree view ---
+	const activePrTreeView = vscode.window.createTreeView<ActivePrTreeItem>('azdo-pr.activePr', {
+		treeDataProvider: {
+			onDidChangeTreeData: activePrProxyEmitter.event,
+			getTreeItem(element: ActivePrTreeItem) {
+				return activePrProvider?.getTreeItem(element) ?? new vscode.TreeItem('');
+			},
+			getChildren(element?: ActivePrTreeItem) {
+				return activePrProvider?.getChildren(element) ?? Promise.resolve([]);
+			},
+		},
+		showCollapseAll: true,
+	});
+	context.subscriptions.push(activePrTreeView);
+
+	// Refresh active PR command
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
+			activePrProvider?.refresh();
+		}),
+	);
+
 	// Open PR detail webview
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', (pr: GitPullRequest) => {
@@ -163,6 +203,35 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 			PrDetailPanel.createOrShow(pr, context.extensionUri, apiClient, detector.currentRemoteInfo, outputChannel);
+		}),
+	);
+
+	// Checkout PR source branch
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.checkoutPullRequest', async (item: unknown) => {
+			// item comes from the tree view inline button — it's a PullRequestTreeItem
+			const pr: GitPullRequest | undefined = (item as any)?.pr;
+			if (!pr?.sourceRefName) {
+				vscode.window.showWarningMessage('No source branch information available.');
+				return;
+			}
+			const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
+			const repo = gitApi?.repositories[0];
+			if (!repo) {
+				vscode.window.showWarningMessage('No git repository found.');
+				return;
+			}
+			outputChannel.appendLine(`[checkout] Fetching and checking out branch: ${branchName}`);
+			try {
+				// Fetch first so the remote branch is available locally
+				await repo.fetch();
+				await repo.checkout(branchName);
+				outputChannel.appendLine(`[checkout] Successfully checked out ${branchName}`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[checkout] Failed: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to checkout branch: ${msg}`);
+			}
 		}),
 	);
 

@@ -20,6 +20,8 @@ export interface API {
 export interface Repository {
     readonly rootUri: Uri;
     readonly state: RepositoryState;
+    checkout(treeish: string): Promise<void>;
+    fetch(remote?: string, ref?: string): Promise<void>;
 }
 
 export interface RepositoryState {
