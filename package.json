@@ -10,7 +10,8 @@
     "Other"
   ],
   "extensionDependencies": [
-    "vscode.git"
+    "vscode.git",
+    "vscode.microsoft-authentication"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -21,6 +22,14 @@
       {
         "command": "vscode-pr-azdo.showDetectionStatus",
         "title": "Azure DevOps PR: Show Detection Status"
+      },
+      {
+        "command": "vscode-pr-azdo.signIn",
+        "title": "Azure DevOps PR: Sign In"
+      },
+      {
+        "command": "vscode-pr-azdo.verifyApi",
+        "title": "Azure DevOps PR: Verify API Connection"
       }
     ]
   },
@@ -39,15 +48,18 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.110.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "typescript-eslint": "^8.56.1",
-    "eslint": "^9.39.3",
+    "@types/vscode": "^1.110.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.3",
+    "eslint": "^9.39.3",
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.3",
-    "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "typescript-eslint": "^8.56.1"
+  },
+  "dependencies": {
+    "azure-devops-node-api": "^15.1.2"
   }
 }
