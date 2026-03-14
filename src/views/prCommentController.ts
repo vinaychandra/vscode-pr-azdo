@@ -1,33 +1,251 @@
 import * as vscode from 'vscode';
 import type { GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
+import type { PullRequestService } from '../azdo/prService';
+import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
 
 /**
  * Manages VS Code inline comments for PR threads.
  *
- * Uses the `vscode.comments` API to display PR comment threads
- * directly in the editor at their original line positions.
+ * Supports: display, replies, new comments, and thread status changes.
  */
 export class PrCommentController implements vscode.Disposable {
     private readonly _controller: vscode.CommentController;
     private readonly _disposables: vscode.Disposable[] = [];
     private _threads: vscode.CommentThread[] = [];
 
+    /** Map VS Code thread → AzDO thread ID for API calls. */
+    private _threadIdMap = new Map<vscode.CommentThread, number>();
+
     /** Workspace root URI for resolving relative paths. */
     private _workspaceRoot: vscode.Uri | undefined;
+
+    /** Set of file paths (relative) that belong to the active PR. */
+    private _prFilePaths = new Set<string>();
+
+    private _prService: PullRequestService | undefined;
+    private _prId: number | undefined;
+
+    /** Fires after a comment action so the tree/provider can refresh. */
+    private readonly _onDidPerformAction = new vscode.EventEmitter<void>();
+    readonly onDidPerformAction = this._onDidPerformAction.event;
 
     constructor(private readonly log: vscode.OutputChannel) {
         this._controller = vscode.comments.createCommentController(
             'azdo-pr-comments',
             'Azure DevOps PR Comments',
         );
-        // Don't show a "comment" action in the gutter — read-only for now
-        this._controller.commentingRangeProvider = undefined;
+
+        this.applyCommentingRangeProvider();
 
         this._workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
-
         this.log.appendLine('[comments] PrCommentController created');
+    }
+
+    /**
+     * (Re-)assign the commentingRangeProvider on the controller.
+     *
+     * VS Code caches the result of provideCommentingRanges per document.
+     * Re-assigning the provider forces VS Code to invalidate that cache
+     * and re-query ranges for every open editor — which is necessary when
+     * the PR context (service / file list) changes after documents are
+     * already open.
+     */
+    private applyCommentingRangeProvider(): void {
+        this._controller.commentingRangeProvider = {
+            provideCommentingRanges: (document: vscode.TextDocument) => {
+                const scheme = document.uri.scheme;
+                // Only consider workspace files and our git-ref content scheme
+                if (scheme !== 'file' && scheme !== GIT_CONTENT_SCHEME) {
+                    return [];
+                }
+                if (!this._prService || !this._prId) {
+                    this.log.appendLine(`[comments] provideCommentingRanges: no PR context — returning [] for ${document.uri.toString()}`);
+                    return [];
+                }
+                const inPr = this.isDocumentInPr(document);
+                this.log.appendLine(`[comments] provideCommentingRanges: uri=${document.uri.toString()}, inPr=${inPr}`);
+                if (inPr) {
+                    return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
+                }
+                return [];
+            },
+        };
+    }
+
+    /** Set the PR context for write operations. */
+    setPrContext(prService: PullRequestService | undefined, prId: number | undefined, prFilePaths?: string[]): void {
+        this._prService = prService;
+        this._prId = prId;
+        this._prFilePaths = new Set(prFilePaths ?? []);
+        this.log.appendLine(`[comments] setPrContext: prId=${prId}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}]`);
+
+        // Re-assign the commenting range provider so VS Code re-queries
+        // provideCommentingRanges for all already-open editors.
+        this.applyCommentingRangeProvider();
+    }
+
+    /**
+     * Check if a document belongs to the active PR (its file is in the changed files list).
+     */
+    private isDocumentInPr(document: vscode.TextDocument): boolean {
+        const root = this._workspaceRoot;
+        if (!root) { return false; }
+
+        const uri = document.uri;
+        // Support both working file:// and azdo-pr-git:// scheme
+        if (uri.scheme === 'file') {
+            const relative = vscode.workspace.asRelativePath(uri, false);
+            return this._prFilePaths.has(relative);
+        }
+        if (uri.scheme === GIT_CONTENT_SCHEME) {
+            const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+            return path !== '__empty__' && this._prFilePaths.has(path);
+        }
+        return false;
+    }
+
+    /** Handle a reply submitted by the user. */
+    async handleReply(reply: vscode.CommentReply): Promise<void> {
+        if (!this._prService || !this._prId) {
+            vscode.window.showWarningMessage('No active PR context for replying.');
+            return;
+        }
+
+        const threadId = this._threadIdMap.get(reply.thread);
+        if (!threadId) {
+            vscode.window.showWarningMessage('Cannot identify thread to reply to.');
+            return;
+        }
+
+        this.log.appendLine(`[comments] Replying to thread ${threadId}: ${reply.text.substring(0, 50)}…`);
+        try {
+            const created = await this._prService.createComment(this._prId, threadId, reply.text);
+            // Optimistically append the new comment to the thread
+            const newComments = [...reply.thread.comments, {
+                body: new vscode.MarkdownString(reply.text),
+                mode: vscode.CommentMode.Preview,
+                author: { name: created.author?.displayName ?? 'You' },
+                timestamp: created.publishedDate ? new Date(created.publishedDate) : new Date(),
+            }];
+            reply.thread.comments = newComments;
+            this.log.appendLine(`[comments] Reply created successfully.`);
+            this._onDidPerformAction.fire();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.log.appendLine(`[comments] Reply failed: ${msg}`);
+            vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+        }
+    }
+
+    /** Handle a new comment created by the user from the gutter. */
+    async handleNewComment(reply: vscode.CommentReply): Promise<void> {
+        if (!this._prService || !this._prId) {
+            vscode.window.showWarningMessage('No active PR context for commenting.');
+            return;
+        }
+
+        const uri = reply.thread.uri;
+        const range = reply.thread.range;
+        if (!range) {
+            vscode.window.showWarningMessage('Cannot determine line range for comment.');
+            reply.thread.dispose();
+            return;
+        }
+        const filePath = this.resolveFilePath(uri);
+
+        if (!filePath) {
+            vscode.window.showWarningMessage('Cannot determine file path for comment.');
+            reply.thread.dispose();
+            return;
+        }
+
+        // AzDO uses 1-based positions
+        const startLine = range.start.line + 1;
+        const startCol = range.start.character + 1;
+        const endLine = range.end.line + 1;
+        const endCol = range.end.character + 1;
+
+        this.log.appendLine(`[comments] Creating new thread on ${filePath} L${startLine}:${startCol}-L${endLine}:${endCol}`);
+        try {
+            const created = await this._prService.createThread(
+                this._prId,
+                reply.text,
+                { filePath: `/${filePath}`, startLine, startCol, endLine, endCol },
+            );
+
+            // Replace the temporary thread with a proper one
+            reply.thread.comments = [{
+                body: new vscode.MarkdownString(reply.text),
+                mode: vscode.CommentMode.Preview,
+                author: { name: created.comments?.[0]?.author?.displayName ?? 'You' },
+                timestamp: new Date(),
+            }];
+            reply.thread.canReply = true;
+            reply.thread.label = 'Active';
+            if (created.id) {
+                this._threadIdMap.set(reply.thread, created.id);
+                this._threads.push(reply.thread);
+            }
+
+            this.log.appendLine(`[comments] New thread created: id=${created.id}`);
+            this._onDidPerformAction.fire();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.log.appendLine(`[comments] Create thread failed: ${msg}`);
+            vscode.window.showErrorMessage(`Failed to create comment: ${msg}`);
+            reply.thread.dispose();
+        }
+    }
+
+    /** Change the status of a thread. */
+    async updateThreadStatus(thread: vscode.CommentThread, status: CommentThreadStatus): Promise<void> {
+        this.log.appendLine(`[comments] updateThreadStatus called: status=${status}, prService=${!!this._prService}, prId=${this._prId}`);
+        this.log.appendLine(`[comments]   thread uri=${thread.uri.toString()}, range=${thread.range?.start.line}-${thread.range?.end.line}, contextValue=${thread.contextValue}`);
+        this.log.appendLine(`[comments]   threadIdMap size=${this._threadIdMap.size}, entries=[${[...this._threadIdMap.values()].join(',')}]`);
+        if (!this._prService || !this._prId) {
+            this.log.appendLine(`[comments]   BAIL: no PR context`);
+            return;
+        }
+
+        const threadId = this._threadIdMap.get(thread);
+        this.log.appendLine(`[comments]   looked up threadId=${threadId}`);
+        if (!threadId) {
+            this.log.appendLine(`[comments]   BAIL: thread not found in threadIdMap`);
+            vscode.window.showWarningMessage('Cannot identify thread.');
+            return;
+        }
+
+        const label = statusLabel(status);
+        this.log.appendLine(`[comments] Updating thread ${threadId} status → ${label}`);
+        try {
+            await this._prService.updateThreadStatus(this._prId, threadId, status);
+            thread.label = label;
+            this.log.appendLine(`[comments] Thread status updated.`);
+            this._onDidPerformAction.fire();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.log.appendLine(`[comments] Status update failed: ${msg}`);
+            vscode.window.showErrorMessage(`Failed to update thread status: ${msg}`);
+        }
+    }
+
+    /** Resolve a URI to a relative file path. */
+    private resolveFilePath(uri: vscode.Uri): string | undefined {
+        if (uri.scheme === 'file') {
+            return vscode.workspace.asRelativePath(uri, false);
+        }
+        if (uri.scheme === GIT_CONTENT_SCHEME) {
+            const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+            return path === '__empty__' ? undefined : path;
+        }
+        return undefined;
+    }
+
+    /** Get the AzDO thread ID for a VS Code comment thread (used by status commands). */
+    getThreadId(thread: vscode.CommentThread): number | undefined {
+        return this._threadIdMap.get(thread);
     }
 
     /**
@@ -74,9 +292,16 @@ export class PrCommentController implements vscode.Disposable {
             }
 
             const thread = this._controller.createCommentThread(fileUri, range, comments);
-            thread.canReply = false;
+            thread.canReply = !!this._prService; // Enable replies when we have a PR context
             thread.label = this.getThreadLabel(azdoThread);
             thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+            thread.contextValue = 'azdoPrThread'; // For menu contributions
+
+            // Map this VS Code thread to its AzDO ID for API calls
+            if (azdoThread.id) {
+                this._threadIdMap.set(thread, azdoThread.id);
+            }
+
             this._threads.push(thread);
             created++;
         }
@@ -218,13 +443,27 @@ export class PrCommentController implements vscode.Disposable {
             t.dispose();
         }
         this._threads = [];
+        this._threadIdMap.clear();
     }
 
     dispose(): void {
         this.disposeThreads();
         this._controller.dispose();
+        this._onDidPerformAction.dispose();
         for (const d of this._disposables) {
             d.dispose();
         }
+    }
+}
+
+function statusLabel(status: CommentThreadStatus): string {
+    switch (status) {
+        case CommentThreadStatus.Active: return 'Active';
+        case CommentThreadStatus.Fixed: return 'Fixed';
+        case CommentThreadStatus.WontFix: return "Won't Fix";
+        case CommentThreadStatus.Closed: return 'Closed';
+        case CommentThreadStatus.ByDesign: return 'By Design';
+        case CommentThreadStatus.Pending: return 'Pending';
+        default: return '';
     }
 }

@@ -106,6 +106,27 @@
       {
         "command": "vscode-pr-azdo.openFileDiff",
         "title": "Show Changes"
+      },
+      {
+        "command": "vscode-pr-azdo.resolveThread",
+        "title": "Resolve (Fixed)"
+      },
+      {
+        "command": "vscode-pr-azdo.wontFixThread",
+        "title": "Won't Fix"
+      },
+      {
+        "command": "vscode-pr-azdo.closeThread",
+        "title": "Close"
+      },
+      {
+        "command": "vscode-pr-azdo.reactivateThread",
+        "title": "Reactivate"
+      },
+      {
+        "command": "vscode-pr-azdo.submitComment",
+        "title": "Submit Comment",
+        "enablement": "!commentIsEmpty"
       }
     ],
     "menus": {
@@ -131,6 +152,53 @@
           "command": "vscode-pr-azdo.checkoutPullRequest",
           "when": "viewItem == pullRequest",
           "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.resolveThread",
+          "when": "viewItem == activePr.comment",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.wontFixThread",
+          "when": "viewItem == activePr.comment",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.closeThread",
+          "when": "viewItem == activePr.comment",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.reactivateThread",
+          "when": "viewItem == activePr.comment",
+          "group": "status"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "vscode-pr-azdo.submitComment",
+          "when": "commentController == azdo-pr-comments",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.resolveThread",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.wontFixThread",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.closeThread",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "status"
+        },
+        {
+          "command": "vscode-pr-azdo.reactivateThread",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "status"
         }
       ]
     }

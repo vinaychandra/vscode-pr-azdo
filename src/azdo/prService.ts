@@ -1,5 +1,5 @@
-import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { PullRequestStatus, CommentThreadStatus, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from './apiClient';
 import type { AzDoRemoteInfo } from './remoteInfo';
 
@@ -99,6 +99,56 @@ export class PullRequestService {
         return git.getThreads(
             this.remoteInfo.repositoryName,
             pullRequestId,
+            this.remoteInfo.project,
+        );
+    }
+
+    /** Create a reply comment on an existing thread. */
+    async createComment(pullRequestId: number, threadId: number, content: string): Promise<AzDoComment> {
+        const git = await this.apiClient.getGitApi();
+        return git.createComment(
+            { content, commentType: CommentType.Text },
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            threadId,
+            this.remoteInfo.project,
+        );
+    }
+
+    /** Create a new comment thread on a file (or PR-level if no threadContext). */
+    async createThread(
+        pullRequestId: number,
+        content: string,
+        threadContext?: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number },
+    ): Promise<GitPullRequestCommentThread> {
+        const git = await this.apiClient.getGitApi();
+        const thread: GitPullRequestCommentThread = {
+            comments: [{ content, commentType: CommentType.Text }],
+            status: CommentThreadStatus.Active,
+        };
+        if (threadContext) {
+            thread.threadContext = {
+                filePath: threadContext.filePath,
+                rightFileStart: { line: threadContext.startLine, offset: threadContext.startCol },
+                rightFileEnd: { line: threadContext.endLine, offset: threadContext.endCol },
+            };
+        }
+        return git.createThread(
+            thread,
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            this.remoteInfo.project,
+        );
+    }
+
+    /** Update a thread's status (Active, Fixed, WontFix, Closed, etc.). */
+    async updateThreadStatus(pullRequestId: number, threadId: number, status: CommentThreadStatus): Promise<GitPullRequestCommentThread> {
+        const git = await this.apiClient.getGitApi();
+        return git.updateThread(
+            { status },
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            threadId,
             this.remoteInfo.project,
         );
     }

@@ -55,6 +55,24 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         return this.applyThreadFilter(this._allThreads);
     }
 
+    /** Get relative paths of all changed files in the PR. */
+    get changedFilePaths(): string[] {
+        if (!this._fileTree) { return []; }
+        return this.collectFilePaths(this._fileTree);
+    }
+
+    private collectFilePaths(nodes: (FolderItem | FileChangeItem)[]): string[] {
+        const paths: string[] = [];
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                paths.push(node.filePath);
+            } else if (node instanceof FolderItem) {
+                paths.push(...this.collectFilePaths(node.children));
+            }
+        }
+        return paths;
+    }
+
     get commentFilter(): CommentFilter {
         return this._commentFilter;
     }

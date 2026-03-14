@@ -11,7 +11,7 @@ import { PrDetailPanel } from './views/prDetailPanel';
 import { PrCommentController } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { PullRequestStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 
@@ -151,6 +151,12 @@ export async function activate(context: vscode.ExtensionContext) {
 			});
 			// Update inline comments only after threads are actually loaded
 			activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
+				const pr = activePrProvider?._activePrForContext;
+				commentController.setPrContext(
+					prService,
+					pr?.pullRequestId,
+					activePrProvider?.changedFilePaths,
+				);
 				commentController.updateThreads(activePrProvider?.filteredThreads);
 			});
 		} else {
@@ -161,6 +167,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		proxyEmitter.fire();
 		activePrProxyEmitter.fire();
 		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', false);
+		commentController.setPrContext(undefined, undefined);
 		commentController.updateThreads(undefined); // Clear inline comments
 	}
 
@@ -241,6 +248,83 @@ export async function activate(context: vscode.ExtensionContext) {
 				activePrProvider.setCommentFilter(filter);
 				outputChannel.appendLine(`[ext] Comment filter set to: ${filter}`);
 			}
+		}),
+	);
+
+	// --- Comment interaction commands ---
+
+	// Submit a comment reply or new comment
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.submitComment', async (reply: vscode.CommentReply) => {
+			if (!reply) { return; }
+			const threadId = commentController.getThreadId(reply.thread);
+			if (threadId) {
+				// Existing thread → reply
+				await commentController.handleReply(reply);
+			} else {
+				// New thread from gutter
+				await commentController.handleNewComment(reply);
+			}
+		}),
+	);
+
+	// Thread status commands (work from both inline and sidebar)
+	const registerStatusCommand = (commandId: string, status: CommentThreadStatus) => {
+		context.subscriptions.push(
+			vscode.commands.registerCommand(commandId, async (threadOrItem: vscode.CommentThread | unknown) => {
+				outputChannel.appendLine(`[ext] ${commandId} invoked, arg type=${typeof threadOrItem}, keys=${threadOrItem ? Object.keys(threadOrItem as any).join(',') : 'null'}`);
+
+				// Resolve the vscode.CommentThread from the argument.
+				// VS Code passes different shapes depending on where the command is invoked:
+				//   - Inline thread context menu: a CommentReply-like {thread, text}
+				//   - Direct CommentThread: the thread itself (has canReply)
+				//   - Sidebar CommentThreadItem: {thread: AzDoThread} (thread.id is a number)
+				let vsThread: vscode.CommentThread | undefined;
+				const arg = threadOrItem as any;
+				if (arg && 'canReply' in arg) {
+					// Direct CommentThread object
+					vsThread = arg as vscode.CommentThread;
+				} else if (arg?.thread && 'canReply' in arg.thread) {
+					// CommentReply-like wrapper — unwrap the .thread
+					vsThread = arg.thread as vscode.CommentThread;
+				}
+
+				if (vsThread) {
+					outputChannel.appendLine(`[ext] ${commandId}: resolved inline CommentThread, uri=${vsThread.uri.toString()}`);
+					await commentController.updateThreadStatus(vsThread, status);
+					return;
+				}
+
+				// From sidebar CommentThreadItem — get the AzDO thread and update via service
+				const sidebarThread = arg?.thread;
+				outputChannel.appendLine(`[ext] ${commandId}: sidebar path — thread?.id=${sidebarThread?.id}, prService=${!!prService}, activePrId=${activePrProvider?._activePrForContext?.pullRequestId}`);
+				if (sidebarThread?.id && prService && activePrProvider?._activePrForContext?.pullRequestId) {
+					const prId = activePrProvider._activePrForContext.pullRequestId;
+					try {
+						await prService.updateThreadStatus(prId, sidebarThread.id, status);
+						outputChannel.appendLine(`[ext] Thread ${sidebarThread.id} status → ${status}`);
+						activePrProvider.refresh();
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						outputChannel.appendLine(`[ext] ${commandId}: FAILED — ${msg}`);
+						vscode.window.showErrorMessage(`Failed to update thread: ${msg}`);
+					}
+				} else {
+					outputChannel.appendLine(`[ext] ${commandId}: no matching handler — argument did not match inline or sidebar path`);
+				}
+			}),
+		);
+	};
+
+	registerStatusCommand('vscode-pr-azdo.resolveThread', CommentThreadStatus.Fixed);
+	registerStatusCommand('vscode-pr-azdo.wontFixThread', CommentThreadStatus.WontFix);
+	registerStatusCommand('vscode-pr-azdo.closeThread', CommentThreadStatus.Closed);
+	registerStatusCommand('vscode-pr-azdo.reactivateThread', CommentThreadStatus.Active);
+
+	// Refresh comment controller when a comment action is performed
+	context.subscriptions.push(
+		commentController.onDidPerformAction(() => {
+			activePrProvider?.refresh();
 		}),
 	);
 
