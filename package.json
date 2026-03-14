@@ -18,6 +18,35 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azdo-pr",
+          "title": "Azure DevOps PR",
+          "icon": "$(git-pull-request)"
+        }
+      ]
+    },
+    "views": {
+      "azdo-pr": [
+        {
+          "id": "azdo-pr.pullRequests",
+          "name": "Pull Requests"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "azdo-pr.pullRequests",
+        "contents": "Open a folder containing an Azure DevOps git remote to see pull requests.",
+        "when": "!vscode-pr-azdo:hasAzDoRepo"
+      },
+      {
+        "view": "azdo-pr.pullRequests",
+        "contents": "Sign in to Azure DevOps to view pull requests.\n[Sign In](command:vscode-pr-azdo.signIn)",
+        "when": "vscode-pr-azdo:hasAzDoRepo && !vscode-pr-azdo:isAuthenticated"
+      }
+    ],
     "commands": [
       {
         "command": "vscode-pr-azdo.showDetectionStatus",
@@ -30,8 +59,26 @@
       {
         "command": "vscode-pr-azdo.verifyApi",
         "title": "Azure DevOps PR: Verify API Connection"
+      },
+      {
+        "command": "vscode-pr-azdo.refreshPullRequests",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vscode-pr-azdo.openPullRequest",
+        "title": "Open Pull Request"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vscode-pr-azdo.refreshPullRequests",
+          "when": "view == azdo-pr.pullRequests",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

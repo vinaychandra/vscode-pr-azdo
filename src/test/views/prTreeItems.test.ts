@@ -1,0 +1,102 @@
+import * as assert from 'assert';
+import * as vscode from 'vscode';
+import { CategoryTreeItem, PullRequestTreeItem } from '../../views/prTreeItems';
+import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
+
+suite('CategoryTreeItem', () => {
+    test('sets label and collapsible state', () => {
+        const item = new CategoryTreeItem('allOpen', 'All Open', undefined);
+        assert.strictEqual(item.label, 'All Open');
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+        assert.strictEqual(item.contextValue, 'prCategory');
+    });
+
+    test('shows count in description when provided', () => {
+        const item = new CategoryTreeItem('allOpen', 'All Open', 5);
+        assert.strictEqual(item.description, '5');
+    });
+
+    test('empty description when count is undefined', () => {
+        const item = new CategoryTreeItem('createdByMe', 'Created By Me', undefined);
+        assert.strictEqual(item.description, '');
+    });
+
+    test('stores category type', () => {
+        const item = new CategoryTreeItem('waitingForReview', 'Waiting for My Review', 3);
+        assert.strictEqual(item.category, 'waitingForReview');
+    });
+});
+
+suite('PullRequestTreeItem', () => {
+    function makePr(overrides: Partial<GitPullRequest> = {}): GitPullRequest {
+        return {
+            pullRequestId: 42,
+            title: 'Fix the thing',
+            sourceRefName: 'refs/heads/feature/fix',
+            targetRefName: 'refs/heads/main',
+            isDraft: false,
+            createdBy: { displayName: 'Alice', ...({} as any) },
+            ...overrides,
+        };
+    }
+
+    test('sets label to PR title', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.strictEqual(item.label, 'Fix the thing');
+    });
+
+    test('uses (untitled) for missing title', () => {
+        const item = new PullRequestTreeItem(makePr({ title: undefined }));
+        assert.strictEqual(item.label, '(untitled)');
+    });
+
+    test('description shows PR number', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.strictEqual(item.description, '#42');
+    });
+
+    test('non-collapsible leaf node', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.None);
+    });
+
+    test('uses git-pull-request icon for non-draft PRs', () => {
+        const item = new PullRequestTreeItem(makePr({ isDraft: false }));
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'git-pull-request');
+    });
+
+    test('uses git-pull-request-draft icon for draft PRs', () => {
+        const item = new PullRequestTreeItem(makePr({ isDraft: true }));
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'git-pull-request-draft');
+    });
+
+    test('contextValue is pullRequest', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.strictEqual(item.contextValue, 'pullRequest');
+    });
+
+    test('command opens the PR', () => {
+        const pr = makePr();
+        const item = new PullRequestTreeItem(pr);
+        assert.ok(item.command);
+        assert.strictEqual(item.command.command, 'vscode-pr-azdo.openPullRequest');
+        assert.deepStrictEqual(item.command.arguments, [pr]);
+    });
+
+    test('stores reference to original PR object', () => {
+        const pr = makePr();
+        const item = new PullRequestTreeItem(pr);
+        assert.strictEqual(item.pr, pr);
+    });
+
+    test('tooltip contains author name and branch info', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.ok(item.tooltip instanceof vscode.MarkdownString);
+        const md = (item.tooltip as vscode.MarkdownString).value;
+        assert.ok(md.includes('Alice'));
+        assert.ok(md.includes('feature/fix'));
+        assert.ok(md.includes('main'));
+    });
+});

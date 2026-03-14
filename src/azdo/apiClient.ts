@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as azdev from 'azure-devops-node-api';
 import type { IGitApi } from 'azure-devops-node-api/GitApi';
 import type { ICoreApi } from 'azure-devops-node-api/CoreApi';
+import type { ConnectionData } from 'azure-devops-node-api/interfaces/LocationsInterfaces';
 import type { IAuthProvider } from './auth/iAuthProvider';
 import type { AzDoRemoteInfo } from './remoteInfo';
 
@@ -14,6 +15,7 @@ import type { AzDoRemoteInfo } from './remoteInfo';
  */
 export class AzDoApiClient implements vscode.Disposable {
     private _connection: azdev.WebApi | undefined;
+    private _connectionData: ConnectionData | undefined;
 
     constructor(
         private readonly authProvider: IAuthProvider,
@@ -45,11 +47,34 @@ export class AzDoApiClient implements vscode.Disposable {
     }
 
     /**
+     * Get the authenticated user's identity ID.
+     * Cached after the first call.
+     */
+    async getCurrentUserId(): Promise<string> {
+        if (this._connectionData?.authenticatedUser?.id) {
+            return this._connectionData.authenticatedUser.id;
+        }
+
+        const conn = await this.getConnection();
+        this.log.appendLine('[api] Fetching connection data for current user…');
+        this._connectionData = await conn.connect();
+        const userId = this._connectionData.authenticatedUser?.id;
+        if (!userId) {
+            throw new Error('Could not determine authenticated user identity.');
+        }
+        this.log.appendLine(
+            `[api] Authenticated user: ${this._connectionData.authenticatedUser?.customDisplayName ?? '(unknown)'} (id: ${userId})`,
+        );
+        return userId;
+    }
+
+    /**
      * Invalidate the cached connection so the next call re-authenticates.
      * Useful after a 401 or when the user signs out.
      */
     resetConnection(): void {
         this._connection = undefined;
+        this._connectionData = undefined;
         this.log.appendLine('[api] Connection reset — will re-authenticate on next call.');
     }
 
@@ -65,5 +90,6 @@ export class AzDoApiClient implements vscode.Disposable {
 
     dispose(): void {
         this._connection = undefined;
+        this._connectionData = undefined;
     }
 }

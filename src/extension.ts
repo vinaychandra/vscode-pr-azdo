@@ -3,7 +3,10 @@ import { getGitAPI } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
-import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { PullRequestService } from './azdo/prService';
+import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
+import { PrDetailPanel } from './views/prDetailPanel';
+import { PullRequestStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 
@@ -76,16 +79,50 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(authProvider);
 
 	let apiClient: AzDoApiClient | undefined;
+	let prService: PullRequestService | undefined;
+	let treeProvider: PrTreeDataProvider | undefined;
+	let treeProviderSub: vscode.Disposable | undefined;
+
+	// Stable emitter that the tree view subscribes to once.
+	// We forward events from whichever PrTreeDataProvider is current.
+	const proxyEmitter = new vscode.EventEmitter<void>();
+	context.subscriptions.push(proxyEmitter);
 
 	function rebuildApiClient(): void {
+		outputChannel.appendLine('[ext] rebuildApiClient called');
+
+		// Tear down previous provider subscription
+		treeProviderSub?.dispose();
+		treeProviderSub = undefined;
+
 		apiClient?.dispose();
 		apiClient = undefined;
+		prService = undefined;
+		treeProvider?.dispose();
+		treeProvider = undefined;
 
 		const info = detector.currentRemoteInfo;
 		if (info) {
+			outputChannel.appendLine(`[ext] Building API client for ${info.organization}/${info.project}/${info.repositoryName}`);
 			apiClient = new AzDoApiClient(authProvider, info, outputChannel);
 			context.subscriptions.push(apiClient);
+
+			prService = new PullRequestService(apiClient, info);
+			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel);
+			context.subscriptions.push(treeProvider);
+
+			// Forward real provider's change events through the stable proxy emitter
+			treeProviderSub = treeProvider.onDidChangeTreeData(() => {
+				outputChannel.appendLine('[ext] treeProvider fired onDidChangeTreeData → forwarding to tree view');
+				proxyEmitter.fire();
+			});
+		} else {
+			outputChannel.appendLine('[ext] No remote info — tree provider not created');
 		}
+
+		// Tell the tree view to re-query (shows welcome view or categories)
+		outputChannel.appendLine('[ext] Firing proxy emitter to refresh tree view');
+		proxyEmitter.fire();
 	}
 
 	// Build API client when repo info changes
@@ -93,6 +130,41 @@ export async function activate(context: vscode.ExtensionContext) {
 		detector.onDidChange(() => rebuildApiClient()),
 	);
 	rebuildApiClient();
+
+	// --- Tree view ---
+	outputChannel.appendLine('[ext] Creating tree view azdo-pr.pullRequests');
+	const treeView = vscode.window.createTreeView<PrTreeItem>('azdo-pr.pullRequests', {
+		treeDataProvider: {
+			onDidChangeTreeData: proxyEmitter.event,
+			getTreeItem(element: PrTreeItem) {
+				return treeProvider?.getTreeItem(element) ?? new vscode.TreeItem('');
+			},
+			getChildren(element?: PrTreeItem) {
+				outputChannel.appendLine(`[ext] getChildren called, treeProvider=${treeProvider ? 'yes' : 'NO'}, element=${element ? 'child' : 'root'}`);
+				return treeProvider?.getChildren(element) ?? Promise.resolve([]);
+			},
+		},
+		showCollapseAll: true,
+	});
+	context.subscriptions.push(treeView);
+
+	// Refresh command
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.refreshPullRequests', () => {
+			treeProvider?.refresh();
+		}),
+	);
+
+	// Open PR detail webview
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', (pr: GitPullRequest) => {
+			if (!apiClient || !detector.currentRemoteInfo) {
+				vscode.window.showWarningMessage('Not connected to Azure DevOps.');
+				return;
+			}
+			PrDetailPanel.createOrShow(pr, context.extensionUri, apiClient, detector.currentRemoteInfo, outputChannel);
+		}),
+	);
 
 	// Sign-in command
 	context.subscriptions.push(
@@ -103,6 +175,8 @@ export async function activate(context: vscode.ExtensionContext) {
 					'setContext', 'vscode-pr-azdo:isAuthenticated', true,
 				);
 				vscode.window.showInformationMessage('Azure DevOps PR: Signed in successfully.');
+				outputChannel.appendLine('[ext] Sign-in succeeded — refreshing tree');
+				treeProvider?.refresh();
 			} else {
 				vscode.window.showWarningMessage('Azure DevOps PR: Sign-in was cancelled or failed.');
 			}
