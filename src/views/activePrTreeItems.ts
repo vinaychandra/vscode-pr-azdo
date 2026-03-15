@@ -126,6 +126,17 @@ export class CommentThreadItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon(hasSuggestion(content) ? 'lightbulb' : 'comment');
         this.contextValue = 'activePr.comment';
         this.tooltip = new vscode.MarkdownString(tooltipMd);
+
+        // Click navigates to the comment location in the file
+        const filePath = thread.threadContext?.filePath;
+        const line = thread.threadContext?.rightFileStart?.line ?? 1;
+        if (filePath) {
+            this.command = {
+                command: 'vscode-pr-azdo.goToComment',
+                title: 'Go to Comment',
+                arguments: [filePath.startsWith('/') ? filePath.substring(1) : filePath, line],
+            };
+        }
     }
 }
 

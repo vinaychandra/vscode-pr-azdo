@@ -276,6 +276,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// Navigate to a comment in the file
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
+			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+			if (!workspaceRoot) { return; }
+			const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+			const doc = await vscode.workspace.openTextDocument(fileUri);
+			const editor = await vscode.window.showTextDocument(doc);
+			const pos = new vscode.Position(Math.max(0, line - 1), 0);
+			editor.selection = new vscode.Selection(pos, pos);
+			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+		}),
+	);
+
 	// Filter comments in active PR view
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.filterComments', async () => {
