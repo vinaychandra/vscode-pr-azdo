@@ -150,6 +150,33 @@
       {
         "command": "vscode-pr-azdo.postAiReply",
         "title": "Post Reply to Thread"
+      },
+      {
+        "command": "vscode-pr-azdo.postDraft",
+        "title": "Post Draft Comment",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "vscode-pr-azdo.dismissDraft",
+        "title": "Dismiss Draft",
+        "icon": "$(close)"
+      },
+      {
+        "command": "vscode-pr-azdo.clearDrafts",
+        "title": "Clear All AI Drafts"
+      },
+      {
+        "command": "vscode-pr-azdo.reviewWithAI",
+        "title": "Review with Copilot",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "vscode-pr-azdo.resetPrompts",
+        "title": "Azure DevOps PR: Reset AI Prompts to Defaults"
+      },
+      {
+        "command": "vscode-pr-azdo.viewDefaultPrompts",
+        "title": "Azure DevOps PR: View Default Prompts"
       }
     ],
     "menus": {
@@ -162,6 +189,11 @@
         {
           "command": "vscode-pr-azdo.refreshActivePr",
           "when": "view == azdo-pr.activePr",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.reviewWithAI",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
           "group": "navigation"
         },
         {
@@ -212,6 +244,16 @@
           "command": "vscode-pr-azdo.resolveWithAI",
           "when": "commentThread =~ /azdoPrThread/",
           "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.postDraft",
+          "when": "commentThread =~ /azdoPrDraft/",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.dismissDraft",
+          "when": "commentThread =~ /azdoPrDraft/",
+          "group": "navigation"
         }
       ],
       "comments/commentThread/context": [
@@ -257,6 +299,14 @@
           {
             "name": "explain",
             "description": "Explain what a PR comment is asking for"
+          },
+          {
+            "name": "review",
+            "description": "Review all PR changes and create draft comments with suggestions"
+          },
+          {
+            "name": "review-quick",
+            "description": "Quick summary of PR changes and key concerns"
           }
         ]
       }
@@ -299,7 +349,30 @@
           }
         }
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Azure DevOps PR",
+      "properties": {
+        "vscode-pr-azdo.prompts.fixComment": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom system prompt for the `/fix` command (resolve PR comments). Leave empty to use the default. Run `Azure DevOps PR: View Default Prompts` to see the defaults.",
+          "editPresentation": "multilineText"
+        },
+        "vscode-pr-azdo.prompts.review": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom system prompt for the `/review` command (detailed code review). Leave empty to use the default. Run `Azure DevOps PR: View Default Prompts` to see the defaults.",
+          "editPresentation": "multilineText"
+        },
+        "vscode-pr-azdo.prompts.reviewQuick": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom system prompt for the `/review-quick` command (quick summary). Leave empty to use the default. Run `Azure DevOps PR: View Default Prompts` to see the defaults.",
+          "editPresentation": "multilineText"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

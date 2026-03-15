@@ -104,7 +104,8 @@ suite('PrContextProvider — formatThreadForPrompt', () => {
         const provider = new PrContextProvider();
         const result = provider.formatThreadForPrompt(makeThread());
         assert.ok(result.includes('Comment Thread'));
-        assert.ok(result.includes('/src/index.ts'));
+        assert.ok(result.includes('src/index.ts'));
+        assert.ok(!result.includes('/src/index.ts'), 'should strip leading slash from path');
         assert.ok(result.includes('L10'));
         assert.ok(result.includes('Col1'), 'should include column info');
         assert.ok(result.includes('Alice'));

@@ -65,7 +65,10 @@ export class PrContextProvider {
      */
     formatThreadForPrompt(thread: GitPullRequestCommentThread): string {
         const parts: string[] = [];
-        const filePath = thread.threadContext?.filePath ?? '(PR-level comment)';
+        const rawPath = thread.threadContext?.filePath;
+        const filePath = rawPath
+            ? (rawPath.startsWith('/') ? rawPath.substring(1) : rawPath)
+            : '(PR-level comment)';
         const startLine = thread.threadContext?.rightFileStart?.line;
         const startCol = thread.threadContext?.rightFileStart?.offset;
         const endLine = thread.threadContext?.rightFileEnd?.line;

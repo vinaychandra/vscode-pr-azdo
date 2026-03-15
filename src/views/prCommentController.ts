@@ -21,6 +21,9 @@ export class PrCommentController implements vscode.Disposable {
     private readonly _disposables: vscode.Disposable[] = [];
     private _threads: vscode.CommentThread[] = [];
 
+    /** AI-generated draft comment threads (local only, not posted to AzDO). */
+    private _draftThreads: vscode.CommentThread[] = [];
+
     /** Map VS Code thread → AzDO thread metadata for API calls. */
     private _threadMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
 
@@ -556,8 +559,76 @@ export class PrCommentController implements vscode.Disposable {
         return thread;
     }
 
+    /**
+     * Create a draft comment thread (AI review suggestion, local only).
+     * The thread is styled differently and tracked separately from real AzDO threads.
+     */
+    createDraftThread(filePath: string, line: number, commentBody: string, type?: string): vscode.CommentThread | undefined {
+        const root = this._workspaceRoot;
+        if (!root) { return undefined; }
+
+        const fileUri = vscode.Uri.joinPath(root, filePath);
+        const range = new vscode.Range(Math.max(0, line - 1), 0, Math.max(0, line - 1), 0);
+
+        const typeLabel = type ? ` (${type})` : '';
+        const thread = this._controller.createCommentThread(fileUri, range, [{
+            body: new vscode.MarkdownString(commentBody),
+            mode: vscode.CommentMode.Editing,
+            author: { name: `AI Review${typeLabel}` },
+        }]);
+        thread.canReply = true;
+        thread.label = '✨ AI Draft';
+        thread.contextValue = 'azdoPrDraft';
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+
+        this._draftThreads.push(thread);
+        this.log.appendLine(`[comments] Created draft thread on ${filePath} L${line}: ${commentBody.substring(0, 60)}...`);
+        return thread;
+    }
+
+    /** Dispose a single draft thread. */
+    disposeDraft(thread: vscode.CommentThread): void {
+        const idx = this._draftThreads.indexOf(thread);
+        if (idx >= 0) {
+            this._draftThreads.splice(idx, 1);
+            thread.dispose();
+            this.log.appendLine('[comments] Draft dismissed');
+        }
+    }
+
+    /** Dispose all draft threads. */
+    clearDrafts(): void {
+        for (const t of this._draftThreads) {
+            t.dispose();
+        }
+        const count = this._draftThreads.length;
+        this._draftThreads = [];
+        this.log.appendLine(`[comments] Cleared ${count} draft(s)`);
+    }
+
+    /** Check if a thread is a draft. */
+    isDraft(thread: vscode.CommentThread): boolean {
+        return this._draftThreads.includes(thread);
+    }
+
+    /** Get info about a draft thread for posting. */
+    getDraftInfo(thread: vscode.CommentThread): { filePath: string; line: number; body: string } | undefined {
+        if (!this.isDraft(thread)) { return undefined; }
+        const filePath = this.resolveFilePath(thread.uri);
+        if (!filePath) { return undefined; }
+        const line = (thread.range?.start.line ?? 0) + 1;
+        const body = thread.comments[0]?.body;
+        const text = typeof body === 'string' ? body : (body as vscode.MarkdownString)?.value ?? '';
+        return { filePath, line, body: text };
+    }
+
+    get draftCount(): number {
+        return this._draftThreads.length;
+    }
+
     dispose(): void {
         this.disposeThreads();
+        this.clearDrafts();
         this._controller.dispose();
         this._onDidPerformAction.dispose();
         for (const d of this._disposables) {

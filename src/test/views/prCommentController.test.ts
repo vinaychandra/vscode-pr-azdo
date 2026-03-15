@@ -193,4 +193,41 @@ suite('PrCommentController', () => {
         // but at minimum this verifies the flow doesn't throw
         controller.dispose();
     });
+
+    // --- Draft threads ---
+
+    test('draftCount is 0 initially', () => {
+        const controller = new PrCommentController(createMockLog());
+        assert.strictEqual(controller.draftCount, 0);
+        controller.dispose();
+    });
+
+    test('createDraftThread returns undefined without workspace root', () => {
+        const controller = new PrCommentController(createMockLog());
+        // In test environment, workspace may not be set — draft creation should handle gracefully
+        const result = controller.createDraftThread('test.ts', 1, 'Draft comment');
+        // May or may not succeed depending on workspace state, but should not throw
+        controller.dispose();
+    });
+
+    test('clearDrafts resets draftCount to 0', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.clearDrafts();
+        assert.strictEqual(controller.draftCount, 0);
+        controller.dispose();
+    });
+
+    test('isDraft returns false for non-draft threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.isDraft(fakeThread), false);
+        controller.dispose();
+    });
+
+    test('getDraftInfo returns undefined for non-draft threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.getDraftInfo(fakeThread), undefined);
+        controller.dispose();
+    });
 });

@@ -13,7 +13,7 @@ import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './vie
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { registerPrChatParticipant } from './chat/prChatParticipant';
+import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
@@ -100,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// --- AI Chat Participant & Context Provider ---
 	const prContextProvider = new PrContextProvider();
-	registerPrChatParticipant(context, prContextProvider, outputChannel);
+	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel);
 	registerPrTools(context, prContextProvider, outputChannel);
 
 	// --- Review Mode ---
@@ -460,6 +460,134 @@ export async function activate(context: vscode.ExtensionContext) {
 			await vscode.commands.executeCommand('workbench.action.chat.open', {
 				query: 'Apply the suggestion',
 			});
+		}),
+	);
+
+	// --- AI: Review PR from sidebar button ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
+			outputChannel.appendLine('[ai] Opening Copilot Chat for PR review');
+			await vscode.commands.executeCommand('workbench.action.chat.open', {
+				query: '@azdo-pr /review',
+			});
+		}),
+	);
+
+	// --- AI: Reset prompts to defaults ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.resetPrompts', async () => {
+			const config = vscode.workspace.getConfiguration('vscode-pr-azdo.prompts');
+			await config.update('fixComment', undefined, vscode.ConfigurationTarget.Global);
+			await config.update('review', undefined, vscode.ConfigurationTarget.Global);
+			await config.update('reviewQuick', undefined, vscode.ConfigurationTarget.Global);
+			vscode.window.showInformationMessage('AI prompts reset to defaults.');
+			outputChannel.appendLine('[ext] AI prompts reset to defaults');
+		}),
+	);
+
+	// --- AI: View default prompts ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.viewDefaultPrompts', async () => {
+			const content = [
+				'# Azure DevOps PR — Default AI Prompts',
+				'',
+				'Copy any section below into the corresponding setting to customize it.',
+				'Settings: `vscode-pr-azdo.prompts.fixComment`, `.review`, `.reviewQuick`',
+				'',
+				'---',
+				'',
+				'## /fix — Resolve PR Comments',
+				'',
+				'```',
+				DEFAULT_SYSTEM_PROMPT,
+				'```',
+				'',
+				'---',
+				'',
+				'## /review — Detailed Code Review',
+				'',
+				'```',
+				DEFAULT_REVIEW_PROMPT,
+				'```',
+				'',
+				'---',
+				'',
+				'## /review-quick — Quick Summary',
+				'',
+				'```',
+				DEFAULT_REVIEW_QUICK_PROMPT,
+				'```',
+			].join('\n');
+			const doc = await vscode.workspace.openTextDocument({ content, language: 'markdown' });
+			await vscode.window.showTextDocument(doc, { preview: true });
+		}),
+	);
+
+	// --- AI Review: Draft comment actions ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.postDraft', async (threadOrItem: unknown) => {
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (!vsThread || !commentController.isDraft(vsThread)) {
+				vscode.window.showWarningMessage('Not a draft comment.');
+				return;
+			}
+			if (!prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+				vscode.window.showWarningMessage('No active PR context.');
+				return;
+			}
+
+			const info = commentController.getDraftInfo(vsThread);
+			if (!info) {
+				vscode.window.showWarningMessage('Cannot read draft info.');
+				return;
+			}
+
+			const prId = activePrProvider._activePrForContext.pullRequestId;
+			try {
+				outputChannel.appendLine(`[ai] Posting draft comment on ${info.filePath} L${info.line}`);
+				await prService.createThread(prId, info.body, {
+					filePath: `/${info.filePath}`,
+					startLine: info.line,
+					startCol: 1,
+					endLine: info.line,
+					endCol: 1,
+				});
+				commentController.disposeDraft(vsThread);
+				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
+				activePrProvider.refresh();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[ai] Failed to post draft: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to post comment: ${msg}`);
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.dismissDraft', (threadOrItem: unknown) => {
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (vsThread && commentController.isDraft(vsThread)) {
+				commentController.disposeDraft(vsThread);
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.clearDrafts', () => {
+			commentController.clearDrafts();
+			vscode.window.showInformationMessage('All AI draft comments cleared.');
 		}),
 	);
 
