@@ -137,6 +137,19 @@
         "command": "vscode-pr-azdo.viewOriginalContext",
         "title": "View Original Context",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "vscode-pr-azdo.resolveWithAI",
+        "title": "Resolve with Copilot",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "vscode-pr-azdo.applySuggestion",
+        "title": "Apply Suggestion"
+      },
+      {
+        "command": "vscode-pr-azdo.postAiReply",
+        "title": "Post Reply to Thread"
       }
     ],
     "menus": {
@@ -194,6 +207,11 @@
           "command": "vscode-pr-azdo.viewOriginalContext",
           "when": "commentThread =~ /azdoPrThread/",
           "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.resolveWithAI",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "navigation"
         }
       ],
       "comments/commentThread/context": [
@@ -223,7 +241,65 @@
           "group": "status"
         }
       ]
-    }
+    },
+    "chatParticipants": [
+      {
+        "id": "vscode-pr-azdo.pr-assistant",
+        "name": "azdo-pr",
+        "fullName": "Azure DevOps PR Assistant",
+        "description": "Help resolve PR comments — fix code or draft replies",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "fix",
+            "description": "Resolve a PR comment by fixing code or drafting a reply"
+          },
+          {
+            "name": "explain",
+            "description": "Explain what a PR comment is asking for"
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "vscode-pr-azdo_getCommentThread",
+        "displayName": "Get PR Comment Thread",
+        "modelDescription": "Returns the full comment thread from the active Azure DevOps pull request, including all comments, authors, status, and the file path and line range where the comment was made.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      },
+      {
+        "name": "vscode-pr-azdo_getPrInfo",
+        "displayName": "Get PR Info",
+        "modelDescription": "Returns metadata about the active Azure DevOps pull request: title, description, author, source branch, target branch, and list of changed files.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      },
+      {
+        "name": "vscode-pr-azdo_getCodeAtComment",
+        "displayName": "Get Code at Comment Location",
+        "modelDescription": "Returns the code surrounding the active PR comment's location in the current working copy, including extra context lines before and after.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "extraLines": {
+              "type": "number",
+              "description": "Number of extra context lines before and after the comment range. Default 20."
+            }
+          }
+        }
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

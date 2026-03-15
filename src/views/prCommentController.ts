@@ -277,6 +277,11 @@ export class PrCommentController implements vscode.Disposable {
         return this._threadMetaMap.get(thread)?.id;
     }
 
+    /** Get the full AzDO thread data for a VS Code comment thread. */
+    getAzdoThread(thread: vscode.CommentThread): GitPullRequestCommentThread | undefined {
+        return this._threadMetaMap.get(thread)?.azdoThread;
+    }
+
     /**
      * Get the original context info for a comment thread.
      * Returns iteration ID + original file path + original line range,

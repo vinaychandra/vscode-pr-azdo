@@ -12,6 +12,9 @@ import { PrCommentController } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { PrContextProvider } from './chat/prContextProvider';
+import { registerPrChatParticipant } from './chat/prChatParticipant';
+import { registerPrTools } from './chat/prTools';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 
@@ -94,6 +97,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Inline comment controller — lives for the extension's lifetime
 	const commentController = new PrCommentController(outputChannel);
 	context.subscriptions.push(commentController);
+
+	// --- AI Chat Participant & Context Provider ---
+	const prContextProvider = new PrContextProvider();
+	registerPrChatParticipant(context, prContextProvider, outputChannel);
+	registerPrTools(context, prContextProvider, outputChannel);
 
 	// --- Review Mode ---
 	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
@@ -198,6 +206,8 @@ export async function activate(context: vscode.ExtensionContext) {
 					activePrProvider?.changedFilePaths,
 				);
 				commentController.updateThreads(activePrProvider?.filteredThreads);
+				// Keep AI context provider in sync
+				prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths);
 			});
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
@@ -209,6 +219,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', false);
 		commentController.setPrContext(undefined, undefined);
 		commentController.updateThreads(undefined); // Clear inline comments
+		prContextProvider.setActivePr(undefined);
 		applyReviewMode();
 	}
 
@@ -359,6 +370,98 @@ export async function activate(context: vscode.ExtensionContext) {
 	registerStatusCommand('vscode-pr-azdo.wontFixThread', CommentThreadStatus.WontFix);
 	registerStatusCommand('vscode-pr-azdo.closeThread', CommentThreadStatus.Closed);
 	registerStatusCommand('vscode-pr-azdo.reactivateThread', CommentThreadStatus.Active);
+
+	// --- AI: Resolve with Copilot button ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.resolveWithAI', async (threadOrItem: unknown) => {
+			// Resolve the vscode.CommentThread from the argument
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (!vsThread) {
+				vscode.window.showWarningMessage('Cannot identify comment thread.');
+				return;
+			}
+
+			const azdoThread = commentController.getAzdoThread(vsThread);
+			if (!azdoThread) {
+				vscode.window.showWarningMessage('Cannot find thread data.');
+				return;
+			}
+
+			const filePath = azdoThread.threadContext?.filePath;
+			const startLine = azdoThread.threadContext?.rightFileStart?.line ?? 1;
+			const startCol = azdoThread.threadContext?.rightFileStart?.offset ?? 1;
+			const endLine = azdoThread.threadContext?.rightFileEnd?.line ?? startLine;
+			const endCol = azdoThread.threadContext?.rightFileEnd?.offset ?? startCol;
+			const relativePath = filePath?.startsWith('/') ? filePath.substring(1) : (filePath ?? '');
+
+			// Store context for the chat participant to pick up
+			prContextProvider.setCommentContext({
+				thread: azdoThread,
+				filePath: relativePath,
+				startLine,
+				startCol,
+				endLine,
+				endCol,
+			});
+
+			outputChannel.appendLine(`[ai] Resolve with AI: thread=${azdoThread.id}, file=${relativePath} L${startLine}:${startCol}-L${endLine}:${endCol}`);
+
+			// Open Copilot Chat with @azdo-pr /fix pre-filled
+			await vscode.commands.executeCommand('workbench.action.chat.open', {
+				query: '@azdo-pr /fix',
+			});
+		}),
+	);
+
+	// --- AI: Post reply from chat ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.postAiReply', async (threadId: number, prefillText?: string) => {
+			if (!prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+				vscode.window.showWarningMessage('No active PR context.');
+				return;
+			}
+
+			const reply = await vscode.window.showInputBox({
+				prompt: 'Edit the reply before posting (or press Enter to post as-is)',
+				placeHolder: 'Type your reply…',
+				value: prefillText ?? '',
+			});
+
+			if (reply === undefined) { return; } // cancelled
+			if (!reply.trim()) {
+				vscode.window.showWarningMessage('Reply cannot be empty.');
+				return;
+			}
+
+			const prId = activePrProvider._activePrForContext.pullRequestId;
+			try {
+				await prService.createComment(prId, threadId, reply);
+				outputChannel.appendLine(`[ai] Posted reply to thread ${threadId}`);
+				vscode.window.showInformationMessage('Reply posted to Azure DevOps.');
+				activePrProvider.refresh();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[ai] Failed to post reply: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+			}
+		}),
+	);
+
+	// --- AI: Apply suggestion via Copilot Edits ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.applySuggestion', async () => {
+			outputChannel.appendLine('[ai] Opening Copilot Edits to apply suggestion');
+			await vscode.commands.executeCommand('workbench.action.chat.open', {
+				query: 'Apply the suggestion',
+			});
+		}),
+	);
 
 	// Refresh comment controller when a comment action is performed
 	context.subscriptions.push(
