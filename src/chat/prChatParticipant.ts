@@ -264,23 +264,28 @@ export function registerPrChatParticipant(
                 toolMode: vscode.LanguageModelChatToolMode.Auto,
             }, token);
 
-            // Process the response stream — handle tool calls and text
-            const pendingToolCalls: vscode.LanguageModelToolCallPart[] = [];
             let fullResponseText = '';
+            const MAX_TOOL_ROUNDS = 100;
+            let currentResponse = response;
 
-            for await (const chunk of response.stream) {
-                if (chunk instanceof vscode.LanguageModelTextPart) {
-                    stream.markdown(chunk.value);
-                    fullResponseText += chunk.value;
-                } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
-                    pendingToolCalls.push(chunk);
+            for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+                const pendingToolCalls: vscode.LanguageModelToolCallPart[] = [];
+
+                for await (const chunk of currentResponse.stream) {
+                    if (chunk instanceof vscode.LanguageModelTextPart) {
+                        stream.markdown(chunk.value);
+                        fullResponseText += chunk.value;
+                    } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
+                        pendingToolCalls.push(chunk);
+                    }
                 }
-            }
 
-            // If there are tool calls, execute them and continue
-            if (pendingToolCalls.length > 0) {
+                if (pendingToolCalls.length === 0) {
+                    break; // No more tool calls — done
+                }
+
                 for (const call of pendingToolCalls) {
-                    log.appendLine(`[chat] Tool call: ${call.name}(${JSON.stringify(call.input)})`);
+                    log.appendLine(`[chat] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
                     stream.progress(`Using ${call.name}…`);
 
                     try {
@@ -289,7 +294,6 @@ export function registerPrChatParticipant(
                             toolInvocationToken: undefined,
                         }, token);
 
-                        // Add tool result and continue conversation
                         messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
                         messages.push(vscode.LanguageModelChatMessage.User([
                             new vscode.LanguageModelToolResultPart(call.callId, toolResult.content),
@@ -306,17 +310,11 @@ export function registerPrChatParticipant(
                     }
                 }
 
-                // Continue with tool results
-                const followUp = await request.model.sendRequest(messages, {
+                currentResponse = await request.model.sendRequest(messages, {
                     justification: 'Continuing after tool use',
                     tools,
                     toolMode: vscode.LanguageModelChatToolMode.Auto,
                 }, token);
-
-                for await (const chunk of followUp.text) {
-                    stream.markdown(chunk);
-                    fullResponseText += chunk;
-                }
             }
 
             // Offer action buttons
@@ -465,21 +463,27 @@ async function handleReview(
         }, token);
 
         let fullText = '';
-        const pendingCalls: vscode.LanguageModelToolCallPart[] = [];
+        const MAX_TOOL_ROUNDS = 100;
+        let currentResponse = response;
 
-        for await (const chunk of response.stream) {
-            if (chunk instanceof vscode.LanguageModelTextPart) {
-                stream.markdown(chunk.value);
-                fullText += chunk.value;
-            } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
-                pendingCalls.push(chunk);
+        for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+            const pendingCalls: vscode.LanguageModelToolCallPart[] = [];
+
+            for await (const chunk of currentResponse.stream) {
+                if (chunk instanceof vscode.LanguageModelTextPart) {
+                    stream.markdown(chunk.value);
+                    fullText += chunk.value;
+                } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
+                    pendingCalls.push(chunk);
+                }
             }
-        }
 
-        // Handle tool calls if the LM needs more context
-        if (pendingCalls.length > 0) {
+            if (pendingCalls.length === 0) {
+                break;
+            }
+
             for (const call of pendingCalls) {
-                log.appendLine(`[chat/review] Tool call: ${call.name}(${JSON.stringify(call.input)})`);
+                log.appendLine(`[chat/review] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
                 stream.progress(`Using ${call.name}…`);
                 try {
                     const result = await vscode.lm.invokeTool(call.name, {
@@ -500,15 +504,12 @@ async function handleReview(
                     ]));
                 }
             }
-            const followUp = await request.model.sendRequest(messages, {
+
+            currentResponse = await request.model.sendRequest(messages, {
                 justification: 'Continuing review after tool use',
                 tools,
                 toolMode: vscode.LanguageModelChatToolMode.Auto,
             }, token);
-            for await (const chunk of followUp.text) {
-                stream.markdown(chunk);
-                fullText += chunk;
-            }
         }
 
         // For full review, parse [REVIEW_COMMENT] blocks and create draft threads
