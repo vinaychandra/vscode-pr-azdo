@@ -5,6 +5,9 @@ import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionA
 import type { PullRequestService } from '../azdo/prService';
 import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
 
+/** URI scheme for the virtual PR-level comments document. */
+export const PR_COMMENTS_SCHEME = 'azdo-pr-comments';
+
 /** Stored metadata for a VS Code comment thread. */
 interface ThreadMeta {
     id: number;
@@ -372,10 +375,36 @@ export class PrCommentController implements vscode.Disposable {
         }
 
         let created = 0;
+        let prLevelLine = 0; // Line counter for PR-level comments on the virtual doc
+        const prLevelUri = vscode.Uri.parse(`${PR_COMMENTS_SCHEME}:///PR-Comments`);
+
         for (const azdoThread of threads) {
             const filePath = azdoThread.threadContext?.filePath;
             if (!filePath) {
-                continue; // PR-level comment — skip for inline display
+                // PR-level comment — place on the virtual document
+                const range = new vscode.Range(prLevelLine, 0, prLevelLine, 0);
+                const comments = (azdoThread.comments ?? [])
+                    .filter(c => !c.isDeleted && c.commentType !== CommentType.System)
+                    .map(c => ({
+                        body: new vscode.MarkdownString(c.content ?? ''),
+                        mode: vscode.CommentMode.Preview,
+                        author: { name: c.author?.displayName ?? 'Unknown' },
+                        timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+                    }));
+                if (comments.length === 0) { continue; }
+
+                const thread = this._controller.createCommentThread(prLevelUri, range, comments);
+                thread.canReply = !!this._prService;
+                thread.label = this.getThreadLabel(azdoThread);
+                thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+                thread.contextValue = 'azdoPrThread';
+                if (azdoThread.id) {
+                    this._threadMetaMap.set(thread, { id: azdoThread.id, azdoThread });
+                }
+                this._threads.push(thread);
+                prLevelLine += comments.length + 2; // Space between threads
+                created++;
+                continue;
             }
 
             // Resolve to workspace URI

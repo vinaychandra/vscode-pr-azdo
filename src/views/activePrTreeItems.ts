@@ -127,7 +127,7 @@ export class CommentThreadItem extends vscode.TreeItem {
         this.contextValue = 'activePr.comment';
         this.tooltip = new vscode.MarkdownString(tooltipMd);
 
-        // Click navigates to the comment location in the file
+        // Click navigates to the comment location
         const filePath = thread.threadContext?.filePath;
         const line = thread.threadContext?.rightFileStart?.line ?? 1;
         if (filePath) {
@@ -135,6 +135,12 @@ export class CommentThreadItem extends vscode.TreeItem {
                 command: 'vscode-pr-azdo.goToComment',
                 title: 'Go to Comment',
                 arguments: [filePath.startsWith('/') ? filePath.substring(1) : filePath, line],
+            };
+        } else {
+            // PR-level comment — open the virtual PR Comments document
+            this.command = {
+                command: 'vscode-pr-azdo.openPrComments',
+                title: 'View PR Comments',
             };
         }
     }

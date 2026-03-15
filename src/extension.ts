@@ -8,7 +8,7 @@ import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider'
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import { FileChangeItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel } from './views/prDetailPanel';
-import { PrCommentController } from './views/prCommentController';
+import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
@@ -145,6 +145,24 @@ export async function activate(context: vscode.ExtensionContext) {
 	const gitContentProvider = new GitRefContentProvider(outputChannel);
 	context.subscriptions.push(
 		vscode.workspace.registerTextDocumentContentProvider(GIT_CONTENT_SCHEME, gitContentProvider),
+	);
+
+	// Virtual document provider for PR-level comments
+	context.subscriptions.push(
+		vscode.workspace.registerTextDocumentContentProvider(PR_COMMENTS_SCHEME, {
+			provideTextDocumentContent(): string {
+				return '// PR-level comment threads are displayed as inline comments on this document.\n// You can reply, resolve, or use Copilot on them just like file-level comments.\n';
+			},
+		}),
+	);
+
+	// Open the PR-level comments document
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.openPrComments', async () => {
+			const uri = vscode.Uri.parse(`${PR_COMMENTS_SCHEME}:///PR-Comments`);
+			const doc = await vscode.workspace.openTextDocument(uri);
+			await vscode.window.showTextDocument(doc, { preview: false });
+		}),
 	);
 
 	// Stable emitters that the tree views subscribe to once.
