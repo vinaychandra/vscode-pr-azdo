@@ -6,7 +6,7 @@ import type { AzDoRemoteInfo } from '../azdo/remoteInfo';
 
 /** Messages sent from webview → extension. */
 interface WebviewMessage {
-    command: 'approve' | 'reject' | 'openInBrowser' | 'copyLink';
+    command: 'approve' | 'reject' | 'waitingForAuthor' | 'openInBrowser' | 'copyLink';
 }
 
 /**
@@ -68,6 +68,9 @@ export class PrDetailPanel {
             case 'reject':
                 await this.castVote(-10);
                 break;
+            case 'waitingForAuthor':
+                await this.castVote(-5);
+                break;
             case 'openInBrowser': {
                 const url = buildPrWebUrl(this.remoteInfo, this.pr.pullRequestId!);
                 void vscode.env.openExternal(vscode.Uri.parse(url));
@@ -93,7 +96,7 @@ export class PrDetailPanel {
                 userId,
                 this.remoteInfo.project,
             );
-            const label = vote > 0 ? 'approved' : 'rejected';
+            const label = vote === 10 ? 'approved' : vote === -10 ? 'rejected' : vote === -5 ? 'marked as waiting for author' : `voted (${vote})`;
             this.log.appendLine(`[pr-detail] PR #${this.pr.pullRequestId} ${label}`);
             vscode.window.showInformationMessage(`PR #${this.pr.pullRequestId} ${label}.`);
         } catch (err) {
@@ -253,6 +256,7 @@ export function buildHtml(pr: GitPullRequest, remoteInfo: AzDoRemoteInfo): strin
 
   <div class="toolbar">
     <button class="btn-primary" onclick="send('approve')">👍 Approve</button>
+    <button class="btn-secondary" onclick="send('waitingForAuthor')">⏸️ Waiting for Author</button>
     <button class="btn-danger" onclick="send('reject')">👎 Reject</button>
     <button class="btn-secondary" onclick="send('openInBrowser')">🌐 Open in Browser</button>
     <button class="btn-secondary" onclick="send('copyLink')">📋 Copy Link</button>
