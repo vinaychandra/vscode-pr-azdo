@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI } from './git/gitExtension';
+import { getGitAPI, deleteLocalBranch } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
@@ -225,7 +225,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				);
 				commentController.updateThreads(activePrProvider?.filteredThreads);
 				// Keep AI context provider in sync
-				prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths);
+				prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations);
 			});
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
@@ -800,6 +800,67 @@ export async function activate(context: vscode.ExtensionContext) {
 				const msg = err instanceof Error ? err.message : String(err);
 				outputChannel.appendLine(`[checkout] Failed: ${msg}`);
 				vscode.window.showErrorMessage(`Failed to checkout branch: ${msg}`);
+			}
+		}),
+	);
+
+	// Delete local PR branch
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.deleteBranch', async () => {
+			const pr = activePrProvider?._activePrForContext;
+			if (!pr?.sourceRefName) {
+				vscode.window.showWarningMessage('No active pull request with branch information.');
+				return;
+			}
+			const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
+			const repo = gitApi?.repositories[0];
+			if (!repo) {
+				vscode.window.showWarningMessage('No git repository found.');
+				return;
+			}
+
+			const confirmed = await vscode.window.showWarningMessage(
+				`Delete local branch "${branchName}"?`,
+				{ modal: true },
+				'Delete',
+			);
+			if (confirmed !== 'Delete') { return; }
+
+			const repoRoot = repo.rootUri.fsPath;
+			const currentBranch = repo.state.HEAD?.name;
+
+			try {
+				// If we're on the branch to delete, switch to the target branch first
+				if (currentBranch === branchName) {
+					const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+					outputChannel.appendLine(`[delete-branch] Currently on ${branchName}, switching to ${targetBranch} first`);
+					await repo.checkout(targetBranch);
+				}
+
+				await deleteLocalBranch(repoRoot, branchName);
+				outputChannel.appendLine(`[delete-branch] Deleted local branch: ${branchName}`);
+				vscode.window.showInformationMessage(`Deleted local branch "${branchName}".`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[delete-branch] Failed: ${msg}`);
+
+				// Offer force delete if safe delete failed (unmerged changes)
+				const forceDelete = await vscode.window.showWarningMessage(
+					`Failed to delete branch: ${msg}\n\nForce delete?`,
+					'Force Delete',
+					'Cancel',
+				);
+				if (forceDelete === 'Force Delete') {
+					try {
+						await deleteLocalBranch(repoRoot, branchName, true);
+						outputChannel.appendLine(`[delete-branch] Force-deleted local branch: ${branchName}`);
+						vscode.window.showInformationMessage(`Force-deleted local branch "${branchName}".`);
+					} catch (forceErr) {
+						const forceMsg = forceErr instanceof Error ? forceErr.message : String(forceErr);
+						outputChannel.appendLine(`[delete-branch] Force delete also failed: ${forceMsg}`);
+						vscode.window.showErrorMessage(`Failed to delete branch: ${forceMsg}`);
+					}
+				}
 			}
 		}),
 	);

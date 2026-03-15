@@ -175,6 +175,9 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._iterations = undefined;
         }
         this._onDidChangeTreeData.fire();
+        if (changed) {
+            this._onDidUpdateComments.fire();
+        }
     }
 
     private getCurrentBranchName(): string | undefined {

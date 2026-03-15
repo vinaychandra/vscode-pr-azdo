@@ -177,6 +177,11 @@
       {
         "command": "vscode-pr-azdo.viewDefaultPrompts",
         "title": "Azure DevOps PR: View Default Prompts"
+      },
+      {
+        "command": "vscode-pr-azdo.deleteBranch",
+        "title": "Delete Local Branch",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -211,6 +216,11 @@
         {
           "command": "vscode-pr-azdo.checkoutPullRequest",
           "when": "viewItem == pullRequest",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.deleteBranch",
+          "when": "viewItem == activePr",
           "group": "inline"
         },
         {

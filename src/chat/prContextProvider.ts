@@ -1,4 +1,4 @@
-import type { GitPullRequestCommentThread, GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequestCommentThread, GitPullRequest, GitPullRequestIteration } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 /**
@@ -28,6 +28,7 @@ export class PrContextProvider {
     private _commentContext: CommentContext | undefined;
     private _activePr: GitPullRequest | undefined;
     private _changedFilePaths: string[] = [];
+    private _iterations: GitPullRequestIteration[] = [];
 
     /** Set the active comment context (called when the sparkle button is clicked). */
     setCommentContext(ctx: CommentContext | undefined): void {
@@ -47,9 +48,10 @@ export class PrContextProvider {
     }
 
     /** Update the active PR metadata. */
-    setActivePr(pr: GitPullRequest | undefined, changedFilePaths?: string[]): void {
+    setActivePr(pr: GitPullRequest | undefined, changedFilePaths?: string[], iterations?: GitPullRequestIteration[]): void {
         this._activePr = pr;
         this._changedFilePaths = changedFilePaths ?? [];
+        this._iterations = iterations ?? [];
     }
 
     get activePr(): GitPullRequest | undefined {
@@ -58,6 +60,22 @@ export class PrContextProvider {
 
     get changedFilePaths(): string[] {
         return this._changedFilePaths;
+    }
+
+    get iterations(): GitPullRequestIteration[] {
+        return this._iterations;
+    }
+
+    /**
+     * Resolve the source commit SHA for the iteration in which a comment was made.
+     * Returns undefined if iteration info is not available.
+     */
+    resolveSourceCommit(thread: GitPullRequestCommentThread): string | undefined {
+        const prCtx = (thread as any).pullRequestThreadContext;
+        const iterationId = prCtx?.iterationContext?.secondComparingIteration;
+        if (!iterationId) { return undefined; }
+        const iteration = this._iterations.find(i => i.id === iterationId);
+        return iteration?.sourceRefCommit?.commitId;
     }
 
     /**

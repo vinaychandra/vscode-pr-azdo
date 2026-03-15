@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { execFile } from 'child_process';
 import type { API, GitExtension } from '../typings/git';
 
 /**
@@ -35,4 +36,22 @@ export async function getGitAPI(log: vscode.OutputChannel): Promise<API | undefi
     const api = git.getAPI(1);
     log.appendLine(`[git] Git API acquired. Initial repository count: ${api.repositories.length}`);
     return api;
+}
+
+/**
+ * Delete a local git branch.
+ * Uses `git branch -d` (safe) or `git branch -D` (force) via child_process
+ * since the VS Code Git extension API does not expose branch deletion.
+ */
+export function deleteLocalBranch(repoRoot: string, branchName: string, force = false): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const flag = force ? '-D' : '-d';
+        execFile('git', ['branch', flag, branchName], { cwd: repoRoot }, (err, _stdout, stderr) => {
+            if (err) {
+                reject(new Error(stderr.trim() || err.message));
+            } else {
+                resolve();
+            }
+        });
+    });
 }

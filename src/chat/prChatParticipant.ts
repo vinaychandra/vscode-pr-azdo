@@ -158,16 +158,42 @@ export function registerPrChatParticipant(
             try {
                 const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
                 if (workspaceRoot) {
-                    const fileUri = vscode.Uri.joinPath(workspaceRoot, commentCtx.filePath);
-                    const doc = await vscode.workspace.openTextDocument(fileUri);
-                    const startLine = Math.max(0, commentCtx.startLine - 1);
-                    const endLine = Math.max(0, commentCtx.endLine - 1);
-                    const startCol = Math.max(0, commentCtx.startCol - 1);
-                    const endCol = Math.max(0, commentCtx.endCol - 1);
-                    const range = new vscode.Range(startLine, startCol, endLine, endCol);
-                    const text = doc.getText(range);
+                    // Prefer the file at the original iteration commit over the working copy,
+                    // since the code may have changed since the comment was made.
+                    const sourceCommit = contextProvider.resolveSourceCommit(commentCtx.thread);
+                    let text = '';
+                    if (sourceCommit) {
+                        const fileContent = await gitShowText(workspaceRoot.fsPath, sourceCommit, commentCtx.filePath);
+                        if (fileContent !== undefined) {
+                            const lines = fileContent.split('\n');
+                            // AzDO positions are 1-based; extract the targeted range
+                            const startLine = Math.max(0, commentCtx.startLine - 1);
+                            const endLine = Math.max(0, commentCtx.endLine - 1);
+                            const startCol = Math.max(0, commentCtx.startCol - 1);
+                            const endCol = Math.max(0, commentCtx.endCol - 1);
+                            if (startLine === endLine) {
+                                text = (lines[startLine] ?? '').substring(startCol, endCol || undefined);
+                            } else {
+                                const selected = lines.slice(startLine, endLine + 1);
+                                if (selected.length > 0) {
+                                    selected[0] = selected[0].substring(startCol);
+                                    selected[selected.length - 1] = selected[selected.length - 1].substring(0, endCol || undefined);
+                                }
+                                text = selected.join('\n');
+                            }
+                        }
+                    }
+                    // Fall back to working copy if original context unavailable
+                    if (!text) {
+                        const fileUri = vscode.Uri.joinPath(workspaceRoot, commentCtx.filePath);
+                        const doc = await vscode.workspace.openTextDocument(fileUri);
+                        const range = new vscode.Range(
+                            Math.max(0, commentCtx.startLine - 1), Math.max(0, commentCtx.startCol - 1),
+                            Math.max(0, commentCtx.endLine - 1), Math.max(0, commentCtx.endCol - 1),
+                        );
+                        text = doc.getText(range);
+                    }
                     if (text.length > 0) {
-                        // Show the targeted text, truncated if long
                         const display = text.length > 100
                             ? `${text.substring(0, 50)}…${text.substring(text.length - 50)}`
                             : text;
@@ -529,6 +555,27 @@ function runGitDiff(cwd: string, targetRef: string, filePaths: string[]): Promis
             (err, stdout) => {
                 if (err) {
                     reject(err);
+                } else {
+                    resolve(stdout);
+                }
+            },
+        );
+    });
+}
+
+/**
+ * Run `git show <ref>:<path>` to get file content at a specific commit.
+ * Returns undefined if the file doesn't exist at that ref.
+ */
+function gitShowText(cwd: string, ref: string, filePath: string): Promise<string | undefined> {
+    return new Promise((resolve) => {
+        execFile(
+            'git',
+            ['show', `${ref}:${filePath}`],
+            { cwd, maxBuffer: 10 * 1024 * 1024, encoding: 'utf-8' },
+            (err, stdout) => {
+                if (err) {
+                    resolve(undefined);
                 } else {
                     resolve(stdout);
                 }
