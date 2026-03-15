@@ -367,6 +367,96 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// View original context for a comment thread
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.viewOriginalContext', async (threadOrItem: unknown) => {
+			// Resolve the vscode.CommentThread from the argument (same unwrap pattern as status commands)
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			outputChannel.appendLine(`[original-context] arg type=${typeof arg}, keys=${arg ? Object.keys(arg).join(',') : 'null'}, hasCanReply=${'canReply' in (arg ?? {})}`);
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (!vsThread) {
+				vscode.window.showWarningMessage('Cannot identify comment thread.');
+				return;
+			}
+
+			outputChannel.appendLine(`[original-context] Resolved thread: uri=${vsThread.uri.toString()}, range=${vsThread.range?.start.line}-${vsThread.range?.end.line}, commentsCount=${vsThread.comments.length}, contextValue=${vsThread.contextValue}`);
+
+			const ctx = commentController.getOriginalContext(vsThread);
+			if (!ctx) {
+				vscode.window.showInformationMessage('Original context not available for this comment (no iteration info).');
+				return;
+			}
+
+			outputChannel.appendLine(`[original-context] Context: iterationId=${ctx.iterationId}, filePath=${ctx.filePath}, lines=${ctx.startLine}-${ctx.endLine}, azdoThreadId=${ctx.azdoThread.id}`);
+			if (!ctx) {
+				vscode.window.showInformationMessage('Original context not available for this comment (no iteration info).');
+				return;
+			}
+
+			const iterations = activePrProvider?.iterations;
+			if (!iterations) {
+				vscode.window.showWarningMessage('Iteration data not loaded yet.');
+				return;
+			}
+
+			const iteration = iterations.find(i => i.id === ctx.iterationId);
+			if (!iteration) {
+				vscode.window.showWarningMessage(`Iteration ${ctx.iterationId} not found.`);
+				return;
+			}
+
+			const sourceCommit = iteration.sourceRefCommit?.commitId;
+			const targetCommit = iteration.targetRefCommit?.commitId ?? iteration.commonRefCommit?.commitId;
+			if (!sourceCommit) {
+				vscode.window.showWarningMessage('Source commit SHA not available for this iteration.');
+				return;
+			}
+
+			outputChannel.appendLine(`[original-context] Opening diff for ${ctx.filePath} at iteration ${ctx.iterationId}: target=${targetCommit ?? '(empty)'} ↔ source=${sourceCommit}, line ${ctx.startLine}-${ctx.endLine}`);
+
+			const leftUri = targetCommit
+				? buildGitRefUri(ctx.filePath, targetCommit)
+				: buildGitRefUri('__empty__', 'HEAD');
+			const rightUri = buildGitRefUri(ctx.filePath, sourceCommit);
+			const title = `${ctx.filePath} (Iteration ${ctx.iterationId} — Original Context)`;
+
+			await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title);
+
+			// Place the comment thread on the diff at its original line
+			// AzDO positions are 1-based, VS Code Range is 0-based
+			const line = Math.max(0, ctx.startLine - 1);
+			const col = Math.max(0, ctx.startCol - 1);
+			const endLine = Math.max(0, ctx.endLine - 1);
+			const endCol = Math.max(0, ctx.endCol - 1);
+			const commentRange = new vscode.Range(line, col, endLine, endCol);
+
+			// Build fully rendered comments (with suggestion diffs) against the source commit file
+			const diffComments = await commentController.buildCommentsForUri(ctx.azdoThread, rightUri, commentRange);
+			if (diffComments.length > 0) {
+				const diffThread = commentController.createThreadOnUri(rightUri, commentRange, diffComments);
+				if (diffThread) {
+					diffThread.canReply = false;
+					diffThread.label = 'Original Comment';
+					diffThread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+				}
+			}
+
+			// Scroll to the comment's original line
+			setTimeout(() => {
+				const editor = vscode.window.activeTextEditor;
+				if (editor) {
+					const range = new vscode.Range(line, 0, line, 0);
+					editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+				}
+			}, 500);
+		}),
+	);
+
 	// Open PR detail webview
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', (pr: GitPullRequest) => {

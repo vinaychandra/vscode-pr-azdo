@@ -1,71 +1,102 @@
-# vscode-pr-azdo README
+# Azure DevOps PR — VS Code Extension
 
-This is the README for your extension "vscode-pr-azdo". After writing up a brief description, we recommend including the following sections.
+Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view inline comments with suggestion diffs, reply, resolve threads, and see comments in their original context — all without leaving your editor.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+### Pull Request Browser
 
-For example if there is an image subfolder under your extension project workspace:
+- **All Open PRs** — browse all active pull requests in the repository
+- **Created By Me** — filter to PRs you authored
+- **Waiting for My Review** — see PRs assigned to you for review
+- **Checkout** — one-click checkout of a PR's source branch
 
-\!\[feature X\]\(images/feature-x.png\)
+### Active Pull Request View
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+When you're on a branch with an open PR, the extension automatically detects it and shows:
+
+- **File Changes** — folder tree of changed files with change type labels (Add, Edit, Delete, Rename)
+- **Commits** — list of commits in the PR
+- **Comment Threads** — inline and PR-level comments attached to each file
+
+### Inline Comments
+
+- Comments appear as inline annotations on the exact lines they reference
+- **Suggestion diffs** are rendered as rich `- / +` diffs showing the proposed change
+- **Reply** to existing threads directly from the editor
+- **New comments** — click the `+` gutter icon on any PR file to start a new thread
+- **Thread status** — Resolve, Won't Fix, Close, or Reactivate threads from inline buttons
+
+### Review Mode
+
+A **togglable review mode** keeps comments out of your way when you're not reviewing:
+
+- **OFF (default)** — no inline comments, no `+` gutter icons, no distractions
+- **ON** — full comment UI enabled
+- Toggle via the status bar (`$(eye-closed) Review` / `$(eye) Reviewing`) or the tree view title button
+- A **comment filter** (Active / All) lets you focus on unresolved threads or see everything
+- Review mode state persists across VS Code restarts (per-workspace)
+
+### View Original Context
+
+When code has changed since a comment was made, click the **$(git-compare)** button in the comment thread title bar to open a diff showing the file exactly as it was at the time the comment was created:
+
+- Uses the PR iteration's source and target commit SHAs for an accurate historical diff
+- Places the comment (with fully rendered suggestion diffs) at its original line position
+- Handles file renames and line tracking across iterations
+
+### Diff Views
+
+- **File diff** — compare any changed file against the target branch (`origin/main ↔ Working Copy`)
+- Supports Add, Delete, Edit, and Rename change types
+- Git ref content is fetched via `git show` and cached for performance
+
+### PR Detail Panel
+
+- Webview showing PR metadata: title, description, author, reviewers with vote status, labels, work items, merge status, and auto-complete info
+- Direct link to the PR on Azure DevOps
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- **VS Code** 1.110.0 or later
+- **Git** — the VS Code built-in Git extension must be active
+- A local clone of an **Azure DevOps** Git repository (supports `dev.azure.com` and `visualstudio.com` remotes, HTTPS and SSH)
 
-## Extension Settings
+### Authentication
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in Microsoft authentication provider. Sign in via the Command Palette or the welcome view prompt.
 
-For example:
+## Extension Commands
 
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+| Command                                  | Description                                   |
+| ---------------------------------------- | --------------------------------------------- |
+| `Azure DevOps PR: Sign In`               | Authenticate with Azure DevOps                |
+| `Azure DevOps PR: Show Detection Status` | Show detected org/project/repo                |
+| `Azure DevOps PR: Verify API Connection` | Test API connectivity and list active PRs     |
+| `Toggle Review Mode`                     | Show/hide comments and gutter icons           |
+| `Filter Comments`                        | Switch between Active and All comment threads |
+| `Refresh`                                | Re-fetch PR list or active PR data            |
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- Comments on deleted files show as empty in the original context diff
+- The extension requires the repository to be fetched (`git fetch`) for original context diffs to resolve commit SHAs
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.0.1
 
-### 1.0.0
+Initial development release:
 
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- Azure DevOps remote detection (HTTPS + SSH, dev.azure.com + visualstudio.com)
+- Entra ID authentication
+- PR list with categories (All Open, Created By Me, Waiting for Review)
+- Active PR detection by current branch
+- File change tree with folder compaction
+- Inline comments with suggestion diff rendering
+- Comment replies, new threads, and thread status management
+- Review mode toggle with persistence
+- Comment filtering (Active / All)
+- View Original Context — historical diff with comment placement
+- PR detail webview
+- One-click branch checkout

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread, GitPullRequestIteration } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
 import type { API } from '../typings/git';
@@ -37,12 +37,18 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _commits: GitCommitRef[] | undefined;
     /** All user-visible threads (cached from API, never cleared by filter change). */
     private _allThreads: GitPullRequestCommentThread[] | undefined;
+    private _iterations: GitPullRequestIteration[] | undefined;
     private _commentFilter: CommentFilter = 'active';
     private _reviewMode = false;
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
         return this._activePr;
+    }
+
+    /** Expose cached iterations for the "View Original Context" feature. */
+    get iterations(): GitPullRequestIteration[] | undefined {
+        return this._iterations;
     }
 
     /** Expose cached threads for the comment controller. */
@@ -154,6 +160,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._fileTree = undefined;
         this._commits = undefined;
         this._allThreads = undefined;
+        this._iterations = undefined;
         this._activePr = undefined;
         void this.detectActivePr();
     }
@@ -165,6 +172,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._fileTree = undefined;
             this._commits = undefined;
             this._allThreads = undefined;
+            this._iterations = undefined;
         }
         this._onDidChangeTreeData.fire();
     }
@@ -249,6 +257,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         try {
             // Fetch iterations to find the latest one
             const iterations = await this.prService.getPrIterations(prId);
+            this._iterations = iterations;
             const latestIteration = iterations[iterations.length - 1];
 
             if (latestIteration?.id) {

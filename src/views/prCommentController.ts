@@ -1,9 +1,15 @@
 import * as vscode from 'vscode';
-import type { GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { GitPullRequestCommentThread, Comment as AzDoComment, CommentTrackingCriteria } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
 import type { PullRequestService } from '../azdo/prService';
 import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
+
+/** Stored metadata for a VS Code comment thread. */
+interface ThreadMeta {
+    id: number;
+    azdoThread: GitPullRequestCommentThread;
+}
 
 /**
  * Manages VS Code inline comments for PR threads.
@@ -15,8 +21,8 @@ export class PrCommentController implements vscode.Disposable {
     private readonly _disposables: vscode.Disposable[] = [];
     private _threads: vscode.CommentThread[] = [];
 
-    /** Map VS Code thread → AzDO thread ID for API calls. */
-    private _threadIdMap = new Map<vscode.CommentThread, number>();
+    /** Map VS Code thread → AzDO thread metadata for API calls. */
+    private _threadMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
 
     /** Workspace root URI for resolving relative paths. */
     private _workspaceRoot: vscode.Uri | undefined;
@@ -136,7 +142,7 @@ export class PrCommentController implements vscode.Disposable {
             return;
         }
 
-        const threadId = this._threadIdMap.get(reply.thread);
+        const threadId = this._threadMetaMap.get(reply.thread)?.id;
         if (!threadId) {
             vscode.window.showWarningMessage('Cannot identify thread to reply to.');
             return;
@@ -208,7 +214,7 @@ export class PrCommentController implements vscode.Disposable {
             reply.thread.canReply = true;
             reply.thread.label = 'Active';
             if (created.id) {
-                this._threadIdMap.set(reply.thread, created.id);
+                this._threadMetaMap.set(reply.thread, { id: created.id, azdoThread: created });
                 this._threads.push(reply.thread);
             }
 
@@ -226,16 +232,16 @@ export class PrCommentController implements vscode.Disposable {
     async updateThreadStatus(thread: vscode.CommentThread, status: CommentThreadStatus): Promise<void> {
         this.log.appendLine(`[comments] updateThreadStatus called: status=${status}, prService=${!!this._prService}, prId=${this._prId}`);
         this.log.appendLine(`[comments]   thread uri=${thread.uri.toString()}, range=${thread.range?.start.line}-${thread.range?.end.line}, contextValue=${thread.contextValue}`);
-        this.log.appendLine(`[comments]   threadIdMap size=${this._threadIdMap.size}, entries=[${[...this._threadIdMap.values()].join(',')}]`);
+        this.log.appendLine(`[comments]   threadMetaMap size=${this._threadMetaMap.size}, entries=[${[...this._threadMetaMap.values()].map(m => m.id).join(',')}]`);
         if (!this._prService || !this._prId) {
             this.log.appendLine(`[comments]   BAIL: no PR context`);
             return;
         }
 
-        const threadId = this._threadIdMap.get(thread);
+        const threadId = this._threadMetaMap.get(thread)?.id;
         this.log.appendLine(`[comments]   looked up threadId=${threadId}`);
         if (!threadId) {
-            this.log.appendLine(`[comments]   BAIL: thread not found in threadIdMap`);
+            this.log.appendLine(`[comments]   BAIL: thread not found in threadMetaMap`);
             vscode.window.showWarningMessage('Cannot identify thread.');
             return;
         }
@@ -268,7 +274,65 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Get the AzDO thread ID for a VS Code comment thread (used by status commands). */
     getThreadId(thread: vscode.CommentThread): number | undefined {
-        return this._threadIdMap.get(thread);
+        return this._threadMetaMap.get(thread)?.id;
+    }
+
+    /**
+     * Get the original context info for a comment thread.
+     * Returns iteration ID + original file path + original line range,
+     * or undefined if the thread has no iteration context.
+     */
+    getOriginalContext(thread: vscode.CommentThread): {
+        iterationId: number;
+        filePath: string;
+        startLine: number;
+        startCol: number;
+        endLine: number;
+        endCol: number;
+        azdoThread: GitPullRequestCommentThread;
+    } | undefined {
+        const meta = this._threadMetaMap.get(thread);
+        if (!meta) { return undefined; }
+
+        const azdoThread = meta.azdoThread;
+        const prCtx = (azdoThread as any).pullRequestThreadContext;
+        const iterationId = prCtx?.iterationContext?.secondComparingIteration;
+        if (!iterationId) { return undefined; }
+
+        // Prefer original (pre-tracking) positions, fall back to current tracked positions
+        const tracking: CommentTrackingCriteria | undefined = prCtx?.trackingCriteria;
+        const origFilePath = tracking?.origFilePath
+            ?? azdoThread.threadContext?.filePath;
+        if (!origFilePath) { return undefined; }
+
+        const startLine = tracking?.origRightFileStart?.line
+            ?? azdoThread.threadContext?.rightFileStart?.line
+            ?? 1;
+        const startCol = tracking?.origRightFileStart?.offset
+            ?? azdoThread.threadContext?.rightFileStart?.offset
+            ?? 1;
+        const endLine = tracking?.origRightFileEnd?.line
+            ?? azdoThread.threadContext?.rightFileEnd?.line
+            ?? startLine;
+        const endCol = tracking?.origRightFileEnd?.offset
+            ?? azdoThread.threadContext?.rightFileEnd?.offset
+            ?? startCol;
+
+        const filePath = origFilePath.startsWith('/') ? origFilePath.substring(1) : origFilePath;
+
+        return { iterationId, filePath, startLine, startCol, endLine, endCol, azdoThread };
+    }
+
+    /**
+     * Build rendered VS Code comments for an AzDO thread against a specific file URI and range.
+     * This fetches the file content at that URI to properly render suggestion diffs.
+     */
+    async buildCommentsForUri(
+        azdoThread: GitPullRequestCommentThread,
+        fileUri: vscode.Uri,
+        range: vscode.Range,
+    ): Promise<vscode.Comment[]> {
+        return this.buildComments(azdoThread, fileUri, range);
     }
 
     /**
@@ -328,9 +392,9 @@ export class PrCommentController implements vscode.Disposable {
             thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
             thread.contextValue = 'azdoPrThread'; // For menu contributions
 
-            // Map this VS Code thread to its AzDO ID for API calls
+            // Map this VS Code thread to its AzDO metadata for API calls
             if (azdoThread.id) {
-                this._threadIdMap.set(thread, azdoThread.id);
+                this._threadMetaMap.set(thread, { id: azdoThread.id, azdoThread });
             }
 
             this._threads.push(thread);
@@ -474,7 +538,17 @@ export class PrCommentController implements vscode.Disposable {
             t.dispose();
         }
         this._threads = [];
-        this._threadIdMap.clear();
+        this._threadMetaMap.clear();
+    }
+
+    /**
+     * Create a read-only comment thread on an arbitrary URI (used for "View Original Context" diffs).
+     * The thread is tracked so it gets disposed when the main threads are cleared.
+     */
+    createThreadOnUri(uri: vscode.Uri, range: vscode.Range, comments: vscode.Comment[]): vscode.CommentThread {
+        const thread = this._controller.createCommentThread(uri, range, comments);
+        this._threads.push(thread);
+        return thread;
     }
 
     dispose(): void {

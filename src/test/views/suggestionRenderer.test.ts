@@ -149,4 +149,23 @@ suite('renderSuggestionAsDiff', () => {
         );
         assert.ok(result.includes('+ new line'));
     });
+
+    test('replacedLines with mid-line replacement renders correct diff', () => {
+        // Simulates the "View Original Context" scenario:
+        // Original: "- This is a section i am adding"
+        // Suggestion replaces "adding" (columns 28-34) with "talking about"
+        // replacedLines should be the full line with just the span swapped
+        const original = ['- This is a section i am adding'];
+        const replaced = ['- This is a section i am talking about'];
+        const result = renderSuggestionAsDiff(
+            original,
+            'talking about',
+            undefined,
+            replaced,
+        );
+        assert.ok(result.includes('- - This is a section i am adding'), 'should show original line with -');
+        assert.ok(result.includes('+ - This is a section i am talking about'), 'should show full replaced line with +');
+        // Must NOT produce broken output like "+ talking about- This is a section..."
+        assert.ok(!result.includes('+ talking about-'), 'must not concatenate suggestion with original');
+    });
 });

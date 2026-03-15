@@ -132,6 +132,11 @@
         "command": "vscode-pr-azdo.submitComment",
         "title": "Submit Comment",
         "enablement": "!commentIsEmpty"
+      },
+      {
+        "command": "vscode-pr-azdo.viewOriginalContext",
+        "title": "View Original Context",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {
@@ -182,6 +187,13 @@
           "command": "vscode-pr-azdo.reactivateThread",
           "when": "viewItem == activePr.comment",
           "group": "status"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "vscode-pr-azdo.viewOriginalContext",
+          "when": "commentThread =~ /azdoPrThread/",
+          "group": "navigation"
         }
       ],
       "comments/commentThread/context": [

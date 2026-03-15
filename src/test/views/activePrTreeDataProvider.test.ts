@@ -205,6 +205,18 @@ suite('ActivePrTreeDataProvider — changedFilePaths', () => {
     });
 });
 
+suite('ActivePrTreeDataProvider — iterations', () => {
+    test('iterations is undefined before data load', () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        assert.strictEqual(provider.iterations, undefined);
+        provider.dispose();
+    });
+});
+
 suite('ActivePrTreeDataProvider — dispose', () => {
     test('can be disposed without error', () => {
         const provider = new ActivePrTreeDataProvider(
