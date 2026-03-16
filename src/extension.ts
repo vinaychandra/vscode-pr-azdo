@@ -837,9 +837,13 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			outputChannel.appendLine(`[checkout] Fetching and checking out branch: ${branchName}`);
 			try {
-				// Fetch first so the remote branch is available locally
-				await repo.fetch();
-				await repo.checkout(branchName);
+				await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Notification, title: `Checking out ${branchName}…` },
+					async () => {
+						await repo.fetch();
+						await repo.checkout(branchName);
+					},
+				);
 				outputChannel.appendLine(`[checkout] Successfully checked out ${branchName}`);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
