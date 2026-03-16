@@ -277,9 +277,19 @@ export class PrCommentController implements vscode.Disposable {
         }
     }
 
-    /** Resolve a URI to a relative file path. */
+    /** Resolve a URI to a repo-relative file path. */
     private resolveFilePath(uri: vscode.Uri): string | undefined {
         if (uri.scheme === 'file') {
+            // Use repo root for relative path, not workspace folder
+            const root = this._workspaceRoot;
+            if (root) {
+                const rootPath = root.path;
+                const filePath = uri.path;
+                if (filePath.startsWith(rootPath + '/')) {
+                    return filePath.substring(rootPath.length + 1);
+                }
+            }
+            // Fallback to workspace-relative
             return vscode.workspace.asRelativePath(uri, false);
         }
         if (uri.scheme === GIT_CONTENT_SCHEME) {
