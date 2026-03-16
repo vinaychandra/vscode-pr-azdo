@@ -9,13 +9,16 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
 - **Waiting for My Review** — see PRs assigned to you for review
-- **Checkout** — one-click checkout of a PR's source branch
+- **Checkout** — one-click checkout of a PR's source branch with progress notification
+- **Author display** — PR author's first name shown alongside the PR number
+- **Delete Branch** — remove the local branch after review from the Active PR sidebar
 
 ### Active Pull Request View
 
 When you're on a branch with an open PR, the extension automatically detects it and shows:
 
 - **File Changes** — folder tree of changed files with change type labels (Add, Edit, Delete, Rename)
+- **Reviewed checkboxes** — tick files and folders as reviewed; folder ticks recursively mark all children; state persists per-PR
 - **Commits** — list of commits in the PR
 - **Comment Threads** — inline and PR-level comments attached to each file
 
@@ -56,6 +59,24 @@ When code has changed since a comment was made, click the **$(git-compare)** but
 - Webview showing PR metadata: title, description, author, reviewers with vote status, labels, work items, merge status, and auto-complete info
 - Direct link to the PR on Azure DevOps
 
+### AI Assistant (`@azdo-pr`)
+
+A Copilot Chat participant that helps resolve PR comments and review code:
+
+- **`/fix`** — analyze a comment thread and suggest a code fix, a reply, or both
+- **`/explain`** — explain what a comment is asking for
+- **`/review`** — full AI code review of all changed files with inline draft comments
+- **`/review-quick`** — high-level summary of PR changes and key concerns
+- **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change
+- **Post Reply** button — post an AI-drafted reply directly to Azure DevOps
+- Uses workspace tools to read files and search symbols before responding — no guessing
+- Customizable system prompts via settings (`vscode-pr-azdo.prompts.*`)
+
+### Subfolder Workspace Support
+
+- Works correctly when VS Code is opened on a subfolder of the git repository
+- All file resolution (diffs, comments, AI context) uses the git repo root, not the workspace folder
+
 ## Requirements
 
 - **VS Code** 1.110.0 or later
@@ -68,14 +89,19 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Extension Commands
 
-| Command                                  | Description                                   |
-| ---------------------------------------- | --------------------------------------------- |
-| `Azure DevOps PR: Sign In`               | Authenticate with Azure DevOps                |
-| `Azure DevOps PR: Show Detection Status` | Show detected org/project/repo                |
-| `Azure DevOps PR: Verify API Connection` | Test API connectivity and list active PRs     |
-| `Toggle Review Mode`                     | Show/hide comments and gutter icons           |
-| `Filter Comments`                        | Switch between Active and All comment threads |
-| `Refresh`                                | Re-fetch PR list or active PR data            |
+| Command                                  | Description                                          |
+| ---------------------------------------- | ---------------------------------------------------- |
+| `Azure DevOps PR: Sign In`               | Authenticate with Azure DevOps                       |
+| `Azure DevOps PR: Show Detection Status` | Show detected org/project/repo                       |
+| `Azure DevOps PR: Verify API Connection` | Test API connectivity and list active PRs            |
+| `Toggle Review Mode`                     | Show/hide comments and gutter icons                  |
+| `Filter Comments`                        | Switch between Active and All comment threads        |
+| `Refresh`                                | Re-fetch PR list or active PR data                   |
+| `Checkout Branch`                        | Fetch and checkout a PR's source branch              |
+| `Delete Local Branch`                    | Delete the checked-out PR branch (with force option) |
+| `Review with Copilot`                    | Start an AI code review of the active PR             |
+| `Azure DevOps PR: Reset AI Prompts`      | Reset custom AI prompts to defaults                  |
+| `Azure DevOps PR: View Default Prompts`  | View the built-in system prompts                     |
 
 ## Known Issues
 
@@ -90,9 +116,23 @@ Initial development release:
 
 - Azure DevOps remote detection (HTTPS + SSH, dev.azure.com + visualstudio.com)
 - Entra ID authentication
-- PR list with categories (All Open, Created By Me, Waiting for Review)
+- PR list with categories (All Open, Created By Me, Waiting for Review) with author names
 - Active PR detection by current branch
 - File change tree with folder compaction
+- Reviewed file checkboxes with folder-level recursive toggle (persisted per-PR)
+- Inline comments with suggestion diff rendering
+- Comment replies, new threads, and thread status management
+- Review mode toggle with persistence
+- Comment filtering (Active / All)
+- View Original Context — historical diff with comment placement
+- PR detail webview
+- One-click branch checkout with progress indicator
+- Delete local PR branch (safe delete with force option)
+- AI assistant (`@azdo-pr`) with `/fix`, `/explain`, `/review`, `/review-quick` commands
+- AI draft comments from `/review` posted inline on files
+- Customizable AI prompts
+- Multi-round tool use in AI chat (reads full files across multiple rounds)
+- Subfolder workspace support (uses git repo root for all file resolution)
 - Inline comments with suggestion diff rendering
 - Comment replies, new threads, and thread status management
 - Review mode toggle with persistence
