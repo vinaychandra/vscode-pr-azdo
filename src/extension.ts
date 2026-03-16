@@ -95,13 +95,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	let activePrCommentSub: vscode.Disposable | undefined;
 
 	// Inline comment controller — lives for the extension's lifetime
-	const commentController = new PrCommentController(outputChannel);
+	const commentController = new PrCommentController(outputChannel, gitApi);
 	context.subscriptions.push(commentController);
 
 	// --- AI Chat Participant & Context Provider ---
 	const prContextProvider = new PrContextProvider();
-	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel);
-	registerPrTools(context, prContextProvider, outputChannel);
+	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi);
+	registerPrTools(context, prContextProvider, outputChannel, gitApi);
 
 	// --- Review Mode ---
 	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
@@ -142,7 +142,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Git ref content provider for diff views
-	const gitContentProvider = new GitRefContentProvider(outputChannel);
+	const gitContentProvider = new GitRefContentProvider(outputChannel, gitApi);
 	context.subscriptions.push(
 		vscode.workspace.registerTextDocumentContentProvider(GIT_CONTENT_SCHEME, gitContentProvider),
 	);
@@ -342,9 +342,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Navigate to a comment in the file
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
-			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
-			if (!workspaceRoot) { return; }
-			const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+			const repoRoot = gitApi?.repositories[0]?.rootUri;
+			if (!repoRoot) { return; }
+			const fileUri = vscode.Uri.joinPath(repoRoot, filePath);
 			const doc = await vscode.workspace.openTextDocument(fileUri);
 			const editor = await vscode.window.showTextDocument(doc);
 			const pos = new vscode.Position(Math.max(0, line - 1), 0);
@@ -787,8 +787,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
 			const targetRef = `origin/${targetBranch}`;
-			const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
-			if (!workspaceRoot) { return; }
+			const repoRoot = gitApi?.repositories[0]?.rootUri;
+			if (!repoRoot) { return; }
 
 			const filePath = item.filePath;
 			const changeType = item.changeType;
@@ -802,7 +802,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (changeType & VersionControlChangeType.Add) {
 				// New file: left is empty, right is working copy
 				leftUri = buildGitRefUri('__empty__', targetRef);
-				rightUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+				rightUri = vscode.Uri.joinPath(repoRoot, filePath);
 				title = `${item.fileName} (Added)`;
 			} else if (changeType & VersionControlChangeType.Delete) {
 				// Deleted file: left is target branch, right is empty
@@ -812,7 +812,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			} else {
 				// Edit/Rename/etc: left is target branch, right is working copy
 				leftUri = buildGitRefUri(filePath, targetRef);
-				rightUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+				rightUri = vscode.Uri.joinPath(repoRoot, filePath);
 				title = `${item.fileName} (${targetBranch} ↔ Working Copy)`;
 			}
 

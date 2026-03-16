@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { PrContextProvider } from './prContextProvider';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { API } from '../typings/git';
 
 /**
  * Register custom LM tools that provide PR-specific context to the language model.
@@ -9,6 +10,7 @@ export function registerPrTools(
     context: vscode.ExtensionContext,
     contextProvider: PrContextProvider,
     log: vscode.OutputChannel,
+    gitApi?: API,
 ): void {
     // --- Tool: getCommentThread ---
     context.subscriptions.push(
@@ -55,7 +57,8 @@ export function registerPrTools(
                 }
 
                 const extra = options.input.extraLines ?? 20;
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+                const workspaceRoot = gitApi?.repositories[0]?.rootUri
+                    ?? vscode.workspace.workspaceFolders?.[0]?.uri;
                 if (!workspaceRoot) {
                     return new vscode.LanguageModelToolResult([
                         new vscode.LanguageModelTextPart('No workspace root.'),

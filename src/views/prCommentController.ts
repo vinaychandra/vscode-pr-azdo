@@ -4,6 +4,7 @@ import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfac
 import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
 import type { PullRequestService } from '../azdo/prService';
 import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
+import type { API } from '../typings/git';
 
 /** URI scheme for the virtual PR-level comments document. */
 export const PR_COMMENTS_SCHEME = 'azdo-pr-comments';
@@ -30,8 +31,11 @@ export class PrCommentController implements vscode.Disposable {
     /** Map VS Code thread → AzDO thread metadata for API calls. */
     private _threadMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
 
-    /** Workspace root URI for resolving relative paths. */
-    private _workspaceRoot: vscode.Uri | undefined;
+    /** Resolve the root URI for mapping repo-relative paths to file URIs. */
+    private get _workspaceRoot(): vscode.Uri | undefined {
+        return this.gitApi?.repositories[0]?.rootUri
+            ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+    }
 
     /** Set of file paths (relative) that belong to the active PR. */
     private _prFilePaths = new Set<string>();
@@ -49,7 +53,7 @@ export class PrCommentController implements vscode.Disposable {
     private readonly _onDidPerformAction = new vscode.EventEmitter<void>();
     readonly onDidPerformAction = this._onDidPerformAction.event;
 
-    constructor(private readonly log: vscode.OutputChannel) {
+    constructor(private readonly log: vscode.OutputChannel, private readonly gitApi?: API) {
         this._controller = vscode.comments.createCommentController(
             'azdo-pr-comments',
             'Azure DevOps PR Comments',
@@ -57,7 +61,6 @@ export class PrCommentController implements vscode.Disposable {
 
         this.applyCommentingRangeProvider();
 
-        this._workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
         this.log.appendLine('[comments] PrCommentController created');
     }
 
@@ -131,6 +134,14 @@ export class PrCommentController implements vscode.Disposable {
         const uri = document.uri;
         // Support both working file:// and azdo-pr-git:// scheme
         if (uri.scheme === 'file') {
+            // Compute path relative to repo root (not workspace folder)
+            const rootPath = root.path;
+            const filePath = uri.path;
+            if (filePath.startsWith(rootPath + '/')) {
+                const relative = filePath.substring(rootPath.length + 1);
+                return this._prFilePaths.has(relative);
+            }
+            // Fallback: try workspace-relative
             const relative = vscode.workspace.asRelativePath(uri, false);
             return this._prFilePaths.has(relative);
         }

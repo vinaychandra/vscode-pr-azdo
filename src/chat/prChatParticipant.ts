@@ -4,8 +4,24 @@ import type { PrContextProvider } from './prContextProvider';
 import type { PrCommentController } from '../views/prCommentController';
 import { hasSuggestion, extractSuggestion } from '../views/suggestionRenderer';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import type { API } from '../typings/git';
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
+
+/** Tools that require toolInvocationToken and cannot be used from a chat participant. */
+const BLOCKED_TOOL_NAMES = new Set([
+    'copilot_applyPatch', 'copilot_replaceString', 'copilot_multiReplaceString',
+    'copilot_insertEdit', 'copilot_createFile', 'copilot_createDirectory',
+    'copilot_editNotebook', 'copilot_editFiles', 'copilot_runVscodeCommand',
+    'copilot_installExtension', 'copilot_switchAgent',
+    'run_in_terminal', 'vscode_get_terminal_confirmation',
+]);
+
+function getChatTools(): { name: string; description: string; inputSchema: object }[] {
+    return vscode.lm.tools
+        .filter(t => !BLOCKED_TOOL_NAMES.has(t.name))
+        .map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? {} }));
+}
 
 export const DEFAULT_REVIEW_PROMPT = `You are an expert code reviewer reviewing a pull request on Azure DevOps.
 
@@ -76,6 +92,9 @@ You have access to the full workspace via tools. USE THEM:
 - Look up related files to understand the broader context
 Do NOT guess about code structure or behavior — look it up first.
 
+**IMPORTANT: Do NOT edit or modify any files directly.** Your role is to SUGGEST changes.
+Provide all code fixes as fenced code blocks in your response. The user will review and apply them.
+
 ## How to Respond
 
 Analyze the comment and determine what it needs:
@@ -125,13 +144,19 @@ export function registerPrChatParticipant(
     contextProvider: PrContextProvider,
     commentController: PrCommentController,
     log: vscode.OutputChannel,
+    gitApi?: API,
 ): vscode.Disposable {
+    /** Resolve the git repo root, falling back to workspace folder. */
+    function getRepoRoot(): vscode.Uri | undefined {
+        return gitApi?.repositories[0]?.rootUri
+            ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+    }
     const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token) => {
         log.appendLine(`[chat] @azdo-pr invoked: command=${request.command ?? '(none)'}, prompt="${request.prompt.substring(0, 80)}"`);
 
         // Route to review handler
         if (request.command === 'review' || request.command === 'review-quick') {
-            return handleReview(request, stream, token, contextProvider, commentController, log);
+            return handleReview(request, stream, token, contextProvider, commentController, log, gitApi);
         }
 
         // Build the LM messages
@@ -140,7 +165,8 @@ export function registerPrChatParticipant(
         ];
 
         // Tell the LM the workspace root so it uses absolute paths with tools
-        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const repoRoot = getRepoRoot();
+        const wsRoot = repoRoot?.fsPath;
         if (wsRoot) {
             messages.push(vscode.LanguageModelChatMessage.User(
                 `The workspace root is: ${wsRoot}\nIMPORTANT: When calling tools like copilot_readFile, use ABSOLUTE paths by prepending the workspace root. For example, to read src/index.ts, use ${wsRoot}/src/index.ts`,
@@ -156,7 +182,7 @@ export function registerPrChatParticipant(
             // Try to read the actual targeted text from the file so the LM doesn't have to count characters
             let targetedTextHint = '';
             try {
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+                const workspaceRoot = getRepoRoot();
                 if (workspaceRoot) {
                     // Prefer the file at the original iteration commit over the working copy,
                     // since the code may have changed since the comment was made.
@@ -211,7 +237,7 @@ export function registerPrChatParticipant(
 
             // Add file reference
             stream.reference(vscode.Uri.file(
-                vscode.workspace.workspaceFolders?.[0]?.uri.fsPath + '/' + commentCtx.filePath,
+                (getRepoRoot()?.fsPath ?? '') + '/' + commentCtx.filePath,
             ));
         }
 
@@ -254,9 +280,8 @@ export function registerPrChatParticipant(
         stream.progress('Analyzing comment…');
 
         try {
-            // Pass all available tools so the LM can explore the workspace
-            const tools = vscode.lm.tools
-                .map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? {} }));
+            // Only expose tools that work without toolInvocationToken
+            const tools = getChatTools();
 
             const response = await request.model.sendRequest(messages, {
                 justification: 'Resolving a PR comment',
@@ -397,6 +422,7 @@ async function handleReview(
     contextProvider: PrContextProvider,
     commentCtrl: PrCommentController,
     log: vscode.OutputChannel,
+    gitApi?: API,
 ): Promise<vscode.ChatResult> {
     const isQuick = request.command === 'review-quick';
     const filePaths = contextProvider.changedFilePaths;
@@ -405,7 +431,8 @@ async function handleReview(
         return { metadata: {} };
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const workspaceRoot = gitApi?.repositories[0]?.rootUri
+        ?? vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!workspaceRoot) {
         stream.markdown('No workspace root found.');
         return { metadata: {} };
@@ -459,9 +486,8 @@ async function handleReview(
     log.appendLine(`[chat] /review${isQuick ? '-quick' : ''}: ${filePaths.length} files`);
 
     try {
-        // Pass all available tools so the LM can explore the workspace during review
-        const tools = vscode.lm.tools
-            .map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? {} }));
+        // Only expose tools that work without toolInvocationToken
+        const tools = getChatTools();
 
         const response = await request.model.sendRequest(messages, {
             justification: 'Reviewing PR changes',

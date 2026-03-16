@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
+import type { API } from '../typings/git';
 
 /**
  * URI scheme for showing file content at a specific git ref.
@@ -21,6 +22,7 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
 
     constructor(
         private readonly log: vscode.OutputChannel,
+        private readonly gitApi?: API,
     ) { }
 
     async provideTextDocumentContent(uri: vscode.Uri, _token: vscode.CancellationToken): Promise<string> {
@@ -40,16 +42,17 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
         const params = new URLSearchParams(uri.query);
         const ref = params.get('ref') ?? 'HEAD';
 
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            this.log.appendLine(`[git-content] No workspace root`);
+        const repoRoot = this.gitApi?.repositories[0]?.rootUri.fsPath
+            ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!repoRoot) {
+            this.log.appendLine(`[git-content] No repo root or workspace root`);
             return '';
         }
 
         this.log.appendLine(`[git-content] Fetching ${ref}:${filePath}`);
 
         try {
-            const content = await gitShow(workspaceRoot, ref, filePath);
+            const content = await gitShow(repoRoot, ref, filePath);
             this._cache.set(cacheKey, content);
             return content;
         } catch (err) {
