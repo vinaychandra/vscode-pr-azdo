@@ -472,5 +472,9 @@
   },
   "dependencies": {
     "azure-devops-node-api": "^15.1.2"
+  },
+  "overrides": {
+    "diff": "^8.0.3",
+    "serialize-javascript": "^7.0.4"
   }
 }
