@@ -23,6 +23,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "icon": "resources/icons/extension-icon.png",
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -30,7 +31,7 @@
         {
           "id": "azdo-pr",
           "title": "Azure DevOps PR",
-          "icon": "$(git-pull-request)"
+          "icon": "resources/icons/sidebar-icon.png"
         }
       ]
     },

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Sidebar E: Azure DevOps diamond + PR branch -->
+  <!-- Small Azure diamond at top-left -->
+  <rect x="2.5" y="2.5" width="5" height="5" rx="1" fill="#C5C5C5" transform="rotate(45,5,5)" />
+  <!-- PR branch structure -->
+  <circle cx="9" cy="7" r="1.8" fill="#C5C5C5" />
+  <circle cx="18" cy="7" r="1.8" fill="#C5C5C5" />
+  <circle cx="18" cy="19" r="1.8" fill="#C5C5C5" />
+  <path d="M9,8.8 L9,14 C9,17.5 14,18 16.2,18.8" stroke="#C5C5C5" stroke-width="1.5" fill="none" stroke-linecap="round" />
+  <line x1="18" y1="8.8" x2="18" y2="17.2" stroke="#C5C5C5" stroke-width="1.5" stroke-linecap="round" />
+</svg>

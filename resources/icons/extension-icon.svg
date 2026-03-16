@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Option C: Clean badge with Azure DevOps mark + PR icon -->
+  <defs>
+    <linearGradient id="bgGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1B6EC2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0078D4;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="16" y="16" width="224" height="224" rx="40" ry="40" fill="url(#bgGrad3)" />
+  <!-- Large PR icon centered -->
+  <!-- Top-left branch point -->
+  <circle cx="96" cy="76" r="18" fill="none" stroke="white" stroke-width="7" />
+  <circle cx="96" cy="76" r="6" fill="white" />
+  <!-- Top-right branch point -->
+  <circle cx="168" cy="76" r="18" fill="none" stroke="white" stroke-width="7" />
+  <circle cx="168" cy="76" r="6" fill="white" />
+  <!-- Bottom merge point -->
+  <circle cx="168" cy="180" r="18" fill="none" stroke="white" stroke-width="7" />
+  <circle cx="168" cy="180" r="6" fill="white" />
+  <!-- Source line down then curve to merge -->
+  <path d="M96,94 L96,130 Q96,160 126,168 L150,174" 
+        stroke="white" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Target line straight down -->
+  <line x1="168" y1="94" x2="168" y2="162" stroke="white" stroke-width="7" stroke-linecap="round" />
+  <!-- Small Azure DevOps diamond accent in bottom-left -->
+  <rect x="52" y="172" width="24" height="24" rx="3" ry="3" fill="#00BCF2" transform="rotate(45,64,184)" />
+</svg>
