@@ -388,6 +388,34 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// Filter comments by author
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.filterCommentsByAuthor', async () => {
+			if (!activePrProvider) { return; }
+			const current = activePrProvider.authorFilter;
+			const authors = activePrProvider.getUniqueAuthors();
+			const items: vscode.QuickPickItem[] = [
+				{ label: '$(organization) All Authors', description: 'Show comments from everyone', detail: current === null ? '(current)' : undefined },
+				...authors.map(name => ({
+					label: `$(person) ${name}`,
+					detail: current === name ? '(current)' : undefined,
+				})),
+			];
+			const picked = await vscode.window.showQuickPick(items, {
+				placeHolder: 'Filter comment threads by author',
+			});
+			if (!picked) { return; }
+			if (picked.label === '$(organization) All Authors') {
+				activePrProvider.setAuthorFilter(null);
+				outputChannel.appendLine('[ext] Author filter cleared');
+			} else {
+				const name = picked.label.replace('$(person) ', '');
+				activePrProvider.setAuthorFilter(name);
+				outputChannel.appendLine(`[ext] Author filter set to: ${name}`);
+			}
+		}),
+	);
+
 	// --- Comment interaction commands ---
 
 	// Submit a comment reply or new comment

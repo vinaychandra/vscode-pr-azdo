@@ -116,6 +116,11 @@
         "icon": "$(filter)"
       },
       {
+        "command": "vscode-pr-azdo.filterCommentsByAuthor",
+        "title": "Filter Comments by Author",
+        "icon": "$(person)"
+      },
+      {
         "command": "vscode-pr-azdo.openFileDiff",
         "title": "Show Changes"
       },
@@ -220,6 +225,11 @@
         },
         {
           "command": "vscode-pr-azdo.filterComments",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:reviewMode",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.filterCommentsByAuthor",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:reviewMode",
           "group": "navigation"
         }

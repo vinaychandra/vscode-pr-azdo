@@ -227,3 +227,307 @@ suite('ActivePrTreeDataProvider — dispose', () => {
         provider.dispose();
     });
 });
+
+suite('ActivePrTreeDataProvider — Author Filter', () => {
+    test('authorFilter defaults to null', () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        assert.strictEqual(provider.authorFilter, null);
+        provider.dispose();
+    });
+
+    test('setAuthorFilter changes filter value', () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        provider.setAuthorFilter('Alice');
+        assert.strictEqual(provider.authorFilter, 'Alice');
+        provider.setAuthorFilter(null);
+        assert.strictEqual(provider.authorFilter, null);
+        provider.dispose();
+    });
+
+    test('setAuthorFilter fires onDidChangeTreeData and onDidUpdateComments', () => {
+        let treeChanged = false;
+        let commentsUpdated = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        provider.onDidChangeTreeData(() => { treeChanged = true; });
+        provider.onDidUpdateComments(() => { commentsUpdated = true; });
+        provider.setAuthorFilter('Alice');
+        assert.ok(treeChanged, 'onDidChangeTreeData should fire');
+        assert.ok(commentsUpdated, 'onDidUpdateComments should fire');
+        provider.dispose();
+    });
+
+    test('getUniqueAuthors returns empty when no threads', () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        assert.deepStrictEqual(provider.getUniqueAuthors(), []);
+        provider.dispose();
+    });
+});
+
+// --- Integration tests that load threads via the PR service mock ---
+
+/** Create a provider with an active PR and pre-loaded threads. */
+async function createProviderWithThreads(threads: GitPullRequestCommentThread[]): Promise<ActivePrTreeDataProvider> {
+    const pr: GitPullRequest = {
+        pullRequestId: 42,
+        title: 'Test PR',
+        createdBy: { displayName: 'Owner', id: 'owner-id' },
+        sourceRefName: 'refs/heads/feature',
+        targetRefName: 'refs/heads/main',
+        status: 1, // Active
+    } as any;
+
+    const provider = new ActivePrTreeDataProvider(
+        createMockPrService({
+            findPrForBranch: async () => pr,
+            getPrIterations: async () => [{ id: 1 }] as any,
+            getPrIterationChanges: async () => ({ changeEntries: [] }),
+            getPrCommits: async () => [],
+            getPrThreads: async () => threads,
+        }),
+        createMockGitApi('feature'),
+        createMockLog(),
+    );
+
+    // Trigger detection + data loading
+    await provider.detectActivePr();
+    const roots = await provider.getChildren();
+    // Expand the root to trigger ensureData → loadThreads
+    if (roots.length > 0) {
+        await provider.getChildren(roots[0]);
+    }
+
+    return provider;
+}
+
+suite('ActivePrTreeDataProvider — getUniqueAuthors with data', () => {
+    test('returns sorted unique author names', async () => {
+        const threads = [
+            makeThread({ id: 1, comments: [{ content: 'a', author: { displayName: 'Charlie' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 2, comments: [{ content: 'b', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 3, comments: [{ content: 'c', author: { displayName: 'Charlie' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        const authors = provider.getUniqueAuthors();
+        assert.deepStrictEqual(authors, ['Alice', 'Charlie']);
+        provider.dispose();
+    });
+
+    test('skips deleted comments', async () => {
+        const threads = [
+            makeThread({
+                id: 1, comments: [
+                    { content: 'keep', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+                    { content: 'deleted', author: { displayName: 'Ghost' }, commentType: CommentType.Text, isDeleted: true },
+                ] as any
+            }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        const authors = provider.getUniqueAuthors();
+        assert.deepStrictEqual(authors, ['Alice']);
+        provider.dispose();
+    });
+
+    test('skips system comments', async () => {
+        const threads = [
+            makeThread({
+                id: 1, comments: [
+                    { content: 'user', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+                    { content: 'system', author: { displayName: 'SystemBot' }, commentType: CommentType.System, isDeleted: false },
+                ] as any
+            }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        const authors = provider.getUniqueAuthors();
+        assert.deepStrictEqual(authors, ['Alice']);
+        provider.dispose();
+    });
+
+    test('skips comments with no author displayName', async () => {
+        const threads = [
+            makeThread({
+                id: 1, comments: [
+                    { content: 'named', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+                    { content: 'no-name', author: {}, commentType: CommentType.Text, isDeleted: false },
+                    { content: 'null-author', author: undefined, commentType: CommentType.Text, isDeleted: false },
+                ] as any
+            }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        const authors = provider.getUniqueAuthors();
+        assert.deepStrictEqual(authors, ['Alice']);
+        provider.dispose();
+    });
+
+    test('handles thread with empty comments array', async () => {
+        const threads = [
+            makeThread({ id: 1, comments: [] as any }),
+            makeThread({ id: 2, comments: [{ content: 'x', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        // The thread with empty comments will be filtered out by loadThreads (no user comment)
+        const provider = await createProviderWithThreads(threads);
+        const authors = provider.getUniqueAuthors();
+        assert.deepStrictEqual(authors, ['Alice']);
+        provider.dispose();
+    });
+});
+
+suite('ActivePrTreeDataProvider — filteredThreads with author filter', () => {
+    test('returns all threads when author filter is null', async () => {
+        const threads = [
+            makeThread({ id: 1, status: CommentThreadStatus.Active, comments: [{ content: 'a', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 2, status: CommentThreadStatus.Active, comments: [{ content: 'b', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+        provider.setCommentFilter('all');
+        provider.setAuthorFilter(null);
+        assert.strictEqual(provider.filteredThreads.length, 2);
+        provider.dispose();
+    });
+
+    test('filters by author when set', async () => {
+        const threads = [
+            makeThread({ id: 1, status: CommentThreadStatus.Active, comments: [{ content: 'a', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 2, status: CommentThreadStatus.Active, comments: [{ content: 'b', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 3, status: CommentThreadStatus.Active, comments: [{ content: 'c', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+        provider.setCommentFilter('all');
+        provider.setAuthorFilter('Alice');
+        const filtered = provider.filteredThreads;
+        assert.strictEqual(filtered.length, 2);
+        assert.ok(filtered.every(t => t.comments?.some(c => (c.author as any)?.displayName === 'Alice')));
+        provider.dispose();
+    });
+
+    test('returns empty when author has no threads', async () => {
+        const threads = [
+            makeThread({ id: 1, status: CommentThreadStatus.Active, comments: [{ content: 'a', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+        provider.setCommentFilter('all');
+        provider.setAuthorFilter('NonExistent');
+        assert.strictEqual(provider.filteredThreads.length, 0);
+        provider.dispose();
+    });
+
+    test('compound filter: active status + author', async () => {
+        const threads = [
+            makeThread({ id: 1, status: CommentThreadStatus.Active, comments: [{ content: 'a', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 2, status: CommentThreadStatus.Fixed, comments: [{ content: 'b', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 3, status: CommentThreadStatus.Active, comments: [{ content: 'c', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+            makeThread({ id: 4, status: CommentThreadStatus.Fixed, comments: [{ content: 'd', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+
+        // active + Alice → only thread 1
+        provider.setCommentFilter('active');
+        provider.setAuthorFilter('Alice');
+        assert.strictEqual(provider.filteredThreads.length, 1);
+        assert.strictEqual(provider.filteredThreads[0].id, 1);
+
+        // all + Alice → threads 1, 2
+        provider.setCommentFilter('all');
+        provider.setAuthorFilter('Alice');
+        assert.strictEqual(provider.filteredThreads.length, 2);
+
+        // active + Bob → only thread 3
+        provider.setCommentFilter('active');
+        provider.setAuthorFilter('Bob');
+        assert.strictEqual(provider.filteredThreads.length, 1);
+        assert.strictEqual(provider.filteredThreads[0].id, 3);
+
+        // active + null → threads 1, 3 (both active, any author)
+        provider.setAuthorFilter(null);
+        assert.strictEqual(provider.filteredThreads.length, 2);
+
+        provider.dispose();
+    });
+
+    test('author filter includes thread if any non-deleted user comment matches', async () => {
+        // Thread has one deleted comment by Alice and one live comment by Alice
+        const threads = [
+            makeThread({
+                id: 1, status: CommentThreadStatus.Active, comments: [
+                    { content: 'deleted', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: true },
+                    { content: 'live', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+                ] as any
+            }),
+            // Thread with only a deleted comment by Bob — only the system comment survives
+            makeThread({
+                id: 2, status: CommentThreadStatus.Active, comments: [
+                    { content: 'deleted', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: true },
+                    { content: 'system', author: { displayName: 'Bob' }, commentType: CommentType.System, isDeleted: false },
+                ] as any
+            }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+        provider.setCommentFilter('all');
+
+        provider.setAuthorFilter('Alice');
+        assert.strictEqual(provider.filteredThreads.length, 1);
+        assert.strictEqual(provider.filteredThreads[0].id, 1);
+
+        // Bob's only non-deleted comment is a System comment → excluded by author filter
+        provider.setAuthorFilter('Bob');
+        assert.strictEqual(provider.filteredThreads.length, 0);
+
+        provider.dispose();
+    });
+
+    test('filteredThreads returns empty when reviewMode is off even with author set', async () => {
+        const threads = [
+            makeThread({ id: 1, status: CommentThreadStatus.Active, comments: [{ content: 'a', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false }] as any }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setAuthorFilter('Alice');
+        // reviewMode is off by default
+        assert.deepStrictEqual(provider.filteredThreads, []);
+        provider.dispose();
+    });
+
+    test('multi-author thread is included if any matching author comment exists', async () => {
+        const threads = [
+            makeThread({
+                id: 1, status: CommentThreadStatus.Active, comments: [
+                    { content: 'alice says', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false },
+                    { content: 'bob replies', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false },
+                ] as any
+            }),
+        ];
+        const provider = await createProviderWithThreads(threads);
+        provider.setReviewMode(true);
+        provider.setCommentFilter('all');
+
+        provider.setAuthorFilter('Alice');
+        assert.strictEqual(provider.filteredThreads.length, 1);
+
+        provider.setAuthorFilter('Bob');
+        assert.strictEqual(provider.filteredThreads.length, 1);
+
+        provider.setAuthorFilter('Charlie');
+        assert.strictEqual(provider.filteredThreads.length, 0);
+
+        provider.dispose();
+    });
+});

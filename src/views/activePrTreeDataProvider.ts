@@ -39,6 +39,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _allThreads: GitPullRequestCommentThread[] | undefined;
     private _iterations: GitPullRequestIteration[] | undefined;
     private _commentFilter: CommentFilter = 'active';
+    private _authorFilter: string | null = null;
     private _reviewMode = false;
     private _reviewedFiles = new Set<string>();
 
@@ -160,6 +161,31 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this.rebuildCommentsFromCache();
         this._onDidChangeTreeData.fire();
         this._onDidUpdateComments.fire();
+    }
+
+    get authorFilter(): string | null {
+        return this._authorFilter;
+    }
+
+    setAuthorFilter(author: string | null): void {
+        this._authorFilter = author;
+        this.rebuildCommentsFromCache();
+        this._onDidChangeTreeData.fire();
+        this._onDidUpdateComments.fire();
+    }
+
+    /** Get sorted unique author display names from all cached threads. */
+    getUniqueAuthors(): string[] {
+        if (!this._allThreads) { return []; }
+        const names = new Set<string>();
+        for (const thread of this._allThreads) {
+            for (const c of thread.comments ?? []) {
+                if (!c.isDeleted && c.commentType !== CommentType.System && c.author?.displayName) {
+                    names.add(c.author.displayName);
+                }
+            }
+        }
+        return [...names].sort((a, b) => a.localeCompare(b));
     }
 
     /** Enable or disable review mode. When OFF, comments are hidden everywhere. */
@@ -409,17 +435,28 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     private applyThreadFilter(threads: GitPullRequestCommentThread[]): GitPullRequestCommentThread[] {
-        if (this._commentFilter === 'all') {
-            return threads;
+        let result = threads;
+
+        // Status filter
+        if (this._commentFilter !== 'all') {
+            result = result.filter(t => {
+                const status = t.status;
+                return status === undefined
+                    || status === CommentThreadStatus.Unknown
+                    || status === CommentThreadStatus.Active
+                    || status === CommentThreadStatus.Pending;
+            });
         }
-        // 'active' — only threads that are not resolved/closed
-        return threads.filter(t => {
-            const status = t.status;
-            return status === undefined
-                || status === CommentThreadStatus.Unknown
-                || status === CommentThreadStatus.Active
-                || status === CommentThreadStatus.Pending;
-        });
+
+        // Author filter
+        if (this._authorFilter) {
+            const author = this._authorFilter;
+            result = result.filter(t =>
+                t.comments?.some(c => !c.isDeleted && c.commentType !== CommentType.System && c.author?.displayName === author),
+            );
+        }
+
+        return result;
     }
 
     /** Get filtered PR-level comments (threads with no file context). */
