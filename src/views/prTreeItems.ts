@@ -31,7 +31,9 @@ export class PullRequestTreeItem extends vscode.TreeItem {
     constructor(public readonly pr: GitPullRequest) {
         super(pr.title ?? '(untitled)', vscode.TreeItemCollapsibleState.None);
 
-        this.description = `#${pr.pullRequestId}`;
+        const author = pr.createdBy?.displayName ?? '';
+        const shortAuthor = author.split(' ')[0] || author;
+        this.description = `#${pr.pullRequestId} · ${shortAuthor}`;
         this.tooltip = new vscode.MarkdownString(
             `**${pr.title}**  \n` +
             `#${pr.pullRequestId} by ${pr.createdBy?.displayName ?? 'unknown'}  \n` +
