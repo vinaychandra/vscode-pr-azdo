@@ -6,7 +6,7 @@ import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
-import { FileChangeItem, type ActivePrTreeItem } from './views/activePrTreeItems';
+import { FileChangeItem, FolderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
@@ -213,6 +213,17 @@ export async function activate(context: vscode.ExtensionContext) {
 					'setContext', 'vscode-pr-azdo:hasActivePr', hasActivePr,
 				);
 				updateReviewModeUi(hasActivePr);
+
+				// Restore persisted reviewed-files state for the newly active PR
+				const prId = activePrProvider?._activePrForContext?.pullRequestId;
+				if (prId && activePrProvider!.reviewedFiles.size === 0) {
+					const persisted = context.workspaceState.get<string[]>(`reviewedFiles-${prId}`);
+					if (persisted && persisted.length > 0) {
+						activePrProvider!.setReviewedFiles(persisted);
+						outputChannel.appendLine(`[reviewed] Restored ${persisted.length} reviewed file(s) for PR #${prId}`);
+					}
+				}
+
 				activePrProxyEmitter.fire();
 			});
 			// Update inline comments only after threads are actually loaded
@@ -283,8 +294,42 @@ export async function activate(context: vscode.ExtensionContext) {
 			},
 		},
 		showCollapseAll: true,
+		manageCheckboxStateManually: true,
 	});
 	context.subscriptions.push(activePrTreeView);
+
+	// Handle file review checkboxes
+	context.subscriptions.push(
+		activePrTreeView.onDidChangeCheckboxState(e => {
+			if (!activePrProvider) { return; }
+
+			for (const [item, newState] of e.items) {
+				const checked = newState === vscode.TreeItemCheckboxState.Checked;
+
+				if (item instanceof FileChangeItem) {
+					activePrProvider.markFileReviewed(item.filePath, checked);
+				} else if (item instanceof FolderItem) {
+					// Recursively mark all descendant files
+					const descendantPaths = activePrProvider.collectDescendantFilePaths(item);
+					for (const fp of descendantPaths) {
+						activePrProvider.markFileReviewed(fp, checked);
+					}
+				}
+			}
+
+			// Recompute all checkbox states (folders depend on children) and refresh
+			activePrProvider.applyCheckboxStates();
+			activePrProxyEmitter.fire();
+
+			// Persist to workspace state
+			const prId = activePrProvider._activePrForContext?.pullRequestId;
+			if (prId) {
+				const reviewed = [...activePrProvider.reviewedFiles];
+				void context.workspaceState.update(`reviewedFiles-${prId}`, reviewed);
+				outputChannel.appendLine(`[reviewed] Persisted ${reviewed.length} reviewed file(s) for PR #${prId}`);
+			}
+		}),
+	);
 
 	// Refresh active PR command
 	context.subscriptions.push(

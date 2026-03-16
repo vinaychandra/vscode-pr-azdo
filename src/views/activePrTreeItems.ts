@@ -55,6 +55,7 @@ export class FolderItem extends vscode.TreeItem {
         super(folderName, vscode.TreeItemCollapsibleState.Collapsed);
         this.iconPath = vscode.ThemeIcon.Folder;
         this.contextValue = 'activePr.folder';
+        this.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
     }
 }
 
@@ -72,6 +73,7 @@ export class FileChangeItem extends vscode.TreeItem {
         this.resourceUri = vscode.Uri.parse(`file:///${filePath}`);
         this.contextValue = 'activePr.file';
         this.tooltip = `${filePath} (${changeTypeLabel(changeType)})`;
+        this.checkboxState = vscode.TreeItemCheckboxState.Unchecked;
 
         // Click opens the diff view
         this.command = {

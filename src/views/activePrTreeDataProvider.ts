@@ -40,6 +40,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _iterations: GitPullRequestIteration[] | undefined;
     private _commentFilter: CommentFilter = 'active';
     private _reviewMode = false;
+    private _reviewedFiles = new Set<string>();
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
@@ -75,6 +76,75 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 paths.push(node.filePath);
             } else if (node instanceof FolderItem) {
                 paths.push(...this.collectFilePaths(node.children));
+            }
+        }
+        return paths;
+    }
+
+    /** Get the set of reviewed file paths. */
+    get reviewedFiles(): ReadonlySet<string> {
+        return this._reviewedFiles;
+    }
+
+    /** Replace the entire reviewed files set (e.g. when loading from persisted state). */
+    setReviewedFiles(paths: string[]): void {
+        this._reviewedFiles = new Set(paths);
+        this.applyCheckboxStates();
+        this._onDidChangeTreeData.fire();
+    }
+
+    /** Mark or unmark a single file as reviewed. Returns the updated full set. */
+    markFileReviewed(filePath: string, reviewed: boolean): ReadonlySet<string> {
+        if (reviewed) {
+            this._reviewedFiles.add(filePath);
+        } else {
+            this._reviewedFiles.delete(filePath);
+        }
+        return this._reviewedFiles;
+    }
+
+    /** Apply checkbox states to the cached file tree based on _reviewedFiles. */
+    applyCheckboxStates(): void {
+        if (!this._fileTree) { return; }
+        this.applyCheckboxToNodes(this._fileTree);
+    }
+
+    private applyCheckboxToNodes(nodes: (FolderItem | FileChangeItem)[]): void {
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                node.checkboxState = this._reviewedFiles.has(node.filePath)
+                    ? vscode.TreeItemCheckboxState.Checked
+                    : vscode.TreeItemCheckboxState.Unchecked;
+            } else if (node instanceof FolderItem) {
+                this.applyCheckboxToNodes(node.children);
+                // Folder is checked if ALL descendant files are checked
+                const allChecked = this.allFilesChecked(node.children);
+                node.checkboxState = allChecked
+                    ? vscode.TreeItemCheckboxState.Checked
+                    : vscode.TreeItemCheckboxState.Unchecked;
+            }
+        }
+    }
+
+    private allFilesChecked(nodes: (FolderItem | FileChangeItem)[]): boolean {
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                if (!this._reviewedFiles.has(node.filePath)) { return false; }
+            } else if (node instanceof FolderItem) {
+                if (!this.allFilesChecked(node.children)) { return false; }
+            }
+        }
+        return nodes.length > 0;
+    }
+
+    /** Collect all file paths under a folder item. */
+    collectDescendantFilePaths(node: FolderItem): string[] {
+        const paths: string[] = [];
+        for (const child of node.children) {
+            if (child instanceof FileChangeItem) {
+                paths.push(child.filePath);
+            } else if (child instanceof FolderItem) {
+                paths.push(...this.collectDescendantFilePaths(child));
             }
         }
         return paths;
@@ -173,6 +243,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._commits = undefined;
             this._allThreads = undefined;
             this._iterations = undefined;
+            this._reviewedFiles.clear();
         }
         this._onDidChangeTreeData.fire();
         if (changed) {
@@ -278,6 +349,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             // Always fetch threads (cached until refresh)
             await this.loadThreads(prId);
             this.rebuildCommentsFromCache();
+            this.applyCheckboxStates();
             this._onDidUpdateComments.fire();
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
