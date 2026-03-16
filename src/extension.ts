@@ -88,6 +88,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	let apiClient: AzDoApiClient | undefined;
 	let prService: PullRequestService | undefined;
+	let currentUserId: string | undefined;
 	let treeProvider: PrTreeDataProvider | undefined;
 	let treeProviderSub: vscode.Disposable | undefined;
 	let activePrProvider: ActivePrTreeDataProvider | undefined;
@@ -196,6 +197,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			apiClient = new AzDoApiClient(authProvider, info, outputChannel);
 			context.subscriptions.push(apiClient);
 
+			// Fetch user ID early — needed to identify own comments for delete button.
+			// Don't await here to avoid blocking tree view setup; wire up comments after it resolves.
+			const userIdPromise = apiClient.getCurrentUserId().catch(() => undefined);
+
 			prService = new PullRequestService(apiClient, info);
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel);
 			context.subscriptions.push(treeProvider);
@@ -226,17 +231,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				activePrProxyEmitter.fire();
 			});
-			// Update inline comments only after threads are actually loaded
+			// Update inline comments only after threads are actually loaded.
+			// Wait for userId to resolve first so own-comment delete buttons appear immediately.
 			activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
-				const pr = activePrProvider?._activePrForContext;
-				commentController.setPrContext(
-					prService,
-					pr?.pullRequestId,
-					activePrProvider?.changedFilePaths,
-				);
-				commentController.updateThreads(activePrProvider?.filteredThreads);
-				// Keep AI context provider in sync
-				prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations);
+				void userIdPromise.then(uid => {
+					currentUserId = uid;
+					const pr = activePrProvider?._activePrForContext;
+					commentController.setPrContext(
+						prService,
+						pr?.pullRequestId,
+						activePrProvider?.changedFilePaths,
+						currentUserId,
+					);
+					commentController.updateThreads(activePrProvider?.filteredThreads);
+					// Keep AI context provider in sync
+					prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations);
+				});
 			});
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
@@ -392,6 +402,34 @@ export async function activate(context: vscode.ExtensionContext) {
 				// New thread from gutter
 				await commentController.handleNewComment(reply);
 			}
+		}),
+	);
+
+	// Delete a comment (only the current user's own comments)
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.deleteComment', async (commentArg: unknown) => {
+			// VS Code passes the comment object directly from comments/comment/title
+			const comment = commentArg as vscode.Comment | undefined;
+			if (!comment) {
+				vscode.window.showWarningMessage('Cannot identify comment to delete.');
+				return;
+			}
+
+			// Find the parent thread that contains this comment
+			const thread = commentController.findThreadForComment(comment);
+			if (!thread) {
+				vscode.window.showWarningMessage('Cannot find thread for this comment.');
+				return;
+			}
+
+			const confirmed = await vscode.window.showWarningMessage(
+				'Delete this comment?',
+				{ modal: true },
+				'Delete',
+			);
+			if (confirmed !== 'Delete') { return; }
+
+			await commentController.handleDeleteComment(thread, comment);
 		}),
 	);
 

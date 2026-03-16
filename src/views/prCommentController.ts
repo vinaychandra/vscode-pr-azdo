@@ -42,6 +42,7 @@ export class PrCommentController implements vscode.Disposable {
 
     private _prService: PullRequestService | undefined;
     private _prId: number | undefined;
+    private _currentUserId: string | undefined;
 
     /** When false, the "+" gutter and inline threads are suppressed. */
     private _reviewMode = false;
@@ -113,11 +114,12 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     /** Set the PR context for write operations. */
-    setPrContext(prService: PullRequestService | undefined, prId: number | undefined, prFilePaths?: string[]): void {
+    setPrContext(prService: PullRequestService | undefined, prId: number | undefined, prFilePaths?: string[], currentUserId?: string): void {
         this._prService = prService;
         this._prId = prId;
         this._prFilePaths = new Set(prFilePaths ?? []);
-        this.log.appendLine(`[comments] setPrContext: prId=${prId}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}]`);
+        this._currentUserId = currentUserId;
+        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}]`);
 
         // Re-assign the commenting range provider so VS Code re-queries
         // provideCommentingRanges for all already-open editors.
@@ -304,6 +306,83 @@ export class PrCommentController implements vscode.Disposable {
         return this._threadMetaMap.get(thread)?.id;
     }
 
+    /** Find the parent thread that contains a given comment. */
+    findThreadForComment(comment: vscode.Comment): vscode.CommentThread | undefined {
+        for (const thread of this._threads) {
+            if (Array.from(thread.comments).includes(comment)) {
+                return thread;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Find the AzDO comment ID for a VS Code Comment within a thread.
+     * Matches by author name and timestamp to find the corresponding AzDO comment.
+     */
+    getAzdoCommentId(thread: vscode.CommentThread, comment: vscode.Comment): number | undefined {
+        const meta = this._threadMetaMap.get(thread);
+        if (!meta) {
+            this.log.appendLine(`[comments] getAzdoCommentId: no meta for thread`);
+            return undefined;
+        }
+        const azdoComments = (meta.azdoThread.comments ?? [])
+            .filter(c => !c.isDeleted && c.commentType !== CommentType.System);
+
+        // Try reference match first
+        const idx = Array.from(thread.comments).indexOf(comment);
+        if (idx >= 0 && idx < azdoComments.length) {
+            this.log.appendLine(`[comments] getAzdoCommentId: matched by index ${idx} → commentId=${azdoComments[idx].id}`);
+            return azdoComments[idx].id;
+        }
+
+        // Fallback: match by author name + timestamp
+        const authorName = typeof comment.author.name === 'string' ? comment.author.name : '';
+        const timestamp = comment.timestamp?.getTime();
+        for (const c of azdoComments) {
+            const azdoTime = c.publishedDate ? new Date(c.publishedDate).getTime() : undefined;
+            if (c.author?.displayName === authorName && azdoTime === timestamp) {
+                this.log.appendLine(`[comments] getAzdoCommentId: matched by author+time → commentId=${c.id}`);
+                return c.id;
+            }
+        }
+
+        this.log.appendLine(`[comments] getAzdoCommentId: no match found (threadComments=${thread.comments.length}, azdoComments=${azdoComments.length}, author=${authorName})`);
+        return undefined;
+    }
+
+    /** Delete a comment from a thread and update the UI. */
+    async handleDeleteComment(thread: vscode.CommentThread, comment: vscode.Comment): Promise<void> {
+        if (!this._prService || !this._prId) {
+            vscode.window.showWarningMessage('No active PR context.');
+            return;
+        }
+        const threadId = this.getThreadId(thread);
+        const commentId = this.getAzdoCommentId(thread, comment);
+        if (!threadId || !commentId) {
+            vscode.window.showWarningMessage('Cannot identify comment to delete.');
+            return;
+        }
+
+        this.log.appendLine(`[comments] Deleting comment ${commentId} from thread ${threadId}`);
+        try {
+            await this._prService.deleteComment(this._prId, threadId, commentId);
+            // Remove the comment from the thread UI
+            thread.comments = thread.comments.filter(c => c !== comment);
+            if (thread.comments.length === 0) {
+                thread.dispose();
+                this._threads = this._threads.filter(t => t !== thread);
+                this._threadMetaMap.delete(thread);
+            }
+            this.log.appendLine(`[comments] Comment ${commentId} deleted.`);
+            this._onDidPerformAction.fire();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.log.appendLine(`[comments] Delete failed: ${msg}`);
+            vscode.window.showErrorMessage(`Failed to delete comment: ${msg}`);
+        }
+    }
+
     /** Get the full AzDO thread data for a VS Code comment thread. */
     getAzdoThread(thread: vscode.CommentThread): GitPullRequestCommentThread | undefined {
         return this._threadMetaMap.get(thread)?.azdoThread;
@@ -410,8 +489,9 @@ export class PrCommentController implements vscode.Disposable {
                         body: new vscode.MarkdownString(c.content ?? ''),
                         mode: vscode.CommentMode.Preview,
                         author: { name: c.author?.displayName ?? 'Unknown' },
+                        contextValue: (this._currentUserId && c.author?.id === this._currentUserId) ? 'ownComment' : undefined,
                         timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
-                    }));
+                    } as vscode.Comment));
                 if (comments.length === 0) { continue; }
 
                 const thread = this._controller.createCommentThread(prLevelUri, range, comments);
@@ -423,6 +503,8 @@ export class PrCommentController implements vscode.Disposable {
                     this._threadMetaMap.set(thread, { id: azdoThread.id, azdoThread });
                 }
                 this._threads.push(thread);
+                // Re-assign to force VS Code to evaluate comment contextValues for menu buttons
+                thread.comments = [...thread.comments];
                 prLevelLine += comments.length + 2; // Space between threads
                 created++;
                 continue;
@@ -456,6 +538,8 @@ export class PrCommentController implements vscode.Disposable {
             }
 
             this._threads.push(thread);
+            // Re-assign to force VS Code to evaluate comment contextValues for menu buttons
+            thread.comments = [...thread.comments];
             created++;
         }
 
@@ -499,6 +583,8 @@ export class PrCommentController implements vscode.Disposable {
 
         return comments.map(c => {
             const content = c.content ?? '';
+            const isOwnComment = !!(this._currentUserId && c.author?.id === this._currentUserId);
+            this.log.appendLine(`[comments]   comment by ${c.author?.displayName} (id=${c.author?.id}), currentUser=${this._currentUserId}, isOwn=${isOwnComment}`);
 
             if (hasSuggestion(content) && originalLines) {
                 const suggested = extractSuggestion(content)!;
@@ -514,16 +600,18 @@ export class PrCommentController implements vscode.Disposable {
                     body,
                     mode: vscode.CommentMode.Preview,
                     author: { name: c.author?.displayName ?? 'Unknown' },
+                    contextValue: isOwnComment ? 'ownComment' : undefined,
                     timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
-                };
+                } as vscode.Comment;
             }
 
             return {
                 body: new vscode.MarkdownString(content),
                 mode: vscode.CommentMode.Preview,
                 author: { name: c.author?.displayName ?? 'Unknown' },
+                contextValue: isOwnComment ? 'ownComment' : undefined,
                 timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
-            };
+            } as vscode.Comment;
         });
     }
 

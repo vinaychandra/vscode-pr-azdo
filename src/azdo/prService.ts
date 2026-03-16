@@ -152,4 +152,16 @@ export class PullRequestService {
             this.remoteInfo.project,
         );
     }
+
+    /** Delete a comment from a thread. */
+    async deleteComment(pullRequestId: number, threadId: number, commentId: number): Promise<void> {
+        const git = await this.apiClient.getGitApi();
+        return git.deleteComment(
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            threadId,
+            commentId,
+            this.remoteInfo.project,
+        );
+    }
 }

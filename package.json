@@ -141,6 +141,11 @@
         "enablement": "!commentIsEmpty"
       },
       {
+        "command": "vscode-pr-azdo.deleteComment",
+        "title": "Delete Comment",
+        "icon": "$(trash)"
+      },
+      {
         "command": "vscode-pr-azdo.viewOriginalContext",
         "title": "View Original Context",
         "icon": "$(git-compare)"
@@ -298,6 +303,20 @@
           "command": "vscode-pr-azdo.reactivateThread",
           "when": "commentThread =~ /azdoPrThread/",
           "group": "status"
+        }
+      ],
+      "comments/comment/title": [
+        {
+          "command": "vscode-pr-azdo.deleteComment",
+          "when": "commentThread =~ /azdoPrThread/ && comment == ownComment",
+          "group": "inline"
+        }
+      ],
+      "comments/comment/context": [
+        {
+          "command": "vscode-pr-azdo.deleteComment",
+          "when": "commentThread =~ /azdoPrThread/ && comment == ownComment",
+          "group": "9_delete"
         }
       ]
     },

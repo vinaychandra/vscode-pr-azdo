@@ -1,0 +1,1 @@
+- Delete button might not show on the current open file until you click another file and come back
