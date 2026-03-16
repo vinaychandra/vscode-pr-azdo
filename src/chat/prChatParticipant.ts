@@ -319,20 +319,20 @@ export function registerPrChatParticipant(
 
             // Offer action buttons
             if (commentCtx) {
-                // Check if the comment contains an AzDO suggestion that can be applied directly
-                const firstComment = (commentCtx.thread.comments ?? []).find(
+                // Show "Apply" button if: (a) the AzDO comment has a suggestion block, OR
+                // (b) the AI response contains fenced code blocks (i.e. a code fix).
+                const hasAzdoSuggestion = (commentCtx.thread.comments ?? []).some(
                     c => !c.isDeleted && c.commentType !== CommentType.System && c.content && hasSuggestion(c.content),
                 );
-                if (firstComment?.content) {
-                    const suggestion = extractSuggestion(firstComment.content);
-                    if (suggestion !== undefined) {
-                        stream.markdown('\n\n---\n');
-                        stream.button({
-                            command: 'vscode-pr-azdo.applySuggestion',
-                            title: '✅ Apply Suggestion',
-                            arguments: [],
-                        });
-                    }
+                const aiResponseHasCodeFix = /```[\w]*\n[\s\S]+?\n```/.test(fullResponseText);
+
+                if (hasAzdoSuggestion || aiResponseHasCodeFix) {
+                    stream.markdown('\n\n---\n');
+                    stream.button({
+                        command: 'vscode-pr-azdo.applySuggestion',
+                        title: '✅ Apply Suggestion',
+                        arguments: [],
+                    });
                 }
 
                 // Extract reply draft from [REPLY]...[/REPLY] block if present
