@@ -1,8 +1,8 @@
 {
   "name": "vscode-pr-azdo",
   "publisher": "vinaydommeti",
-  "displayName": "Azure DevOps Pull Requests",
-  "description": "Azure DevOps - Pull Request Experience",
+  "displayName": "Azure DevOps - Code Reviews",
+  "description": "Azure DevOps - Code Review Experience",
   "version": "0.0.1",
   "author": {
     "name": "Vinay Dommeti"
