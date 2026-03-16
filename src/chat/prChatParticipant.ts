@@ -270,11 +270,13 @@ export function registerPrChatParticipant(
 
             for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
                 const pendingToolCalls: vscode.LanguageModelToolCallPart[] = [];
+                let roundText = '';
 
                 for await (const chunk of currentResponse.stream) {
                     if (chunk instanceof vscode.LanguageModelTextPart) {
                         stream.markdown(chunk.value);
                         fullResponseText += chunk.value;
+                        roundText += chunk.value;
                     } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
                         pendingToolCalls.push(chunk);
                     }
@@ -282,6 +284,11 @@ export function registerPrChatParticipant(
 
                 if (pendingToolCalls.length === 0) {
                     break; // No more tool calls — done
+                }
+
+                // Include any text the model already emitted so it doesn't repeat itself
+                if (roundText) {
+                    messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
                 }
 
                 for (const call of pendingToolCalls) {
@@ -468,11 +475,13 @@ async function handleReview(
 
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
             const pendingCalls: vscode.LanguageModelToolCallPart[] = [];
+            let roundText = '';
 
             for await (const chunk of currentResponse.stream) {
                 if (chunk instanceof vscode.LanguageModelTextPart) {
                     stream.markdown(chunk.value);
                     fullText += chunk.value;
+                    roundText += chunk.value;
                 } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
                     pendingCalls.push(chunk);
                 }
@@ -480,6 +489,11 @@ async function handleReview(
 
             if (pendingCalls.length === 0) {
                 break;
+            }
+
+            // Include any text the model already emitted so it doesn't repeat itself
+            if (roundText) {
+                messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
             }
 
             for (const call of pendingCalls) {
