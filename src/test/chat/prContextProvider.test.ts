@@ -181,3 +181,65 @@ suite('PrContextProvider — formatPrForPrompt', () => {
         assert.ok(!result.includes('Description'));
     });
 });
+
+suite('PrContextProvider — resolveSourceCommit', () => {
+    test('returns undefined when thread has no pullRequestThreadContext', () => {
+        const provider = new PrContextProvider();
+        const thread = makeThread();
+        assert.strictEqual(provider.resolveSourceCommit(thread), undefined);
+    });
+
+    test('returns undefined when no iterations are loaded', () => {
+        const provider = new PrContextProvider();
+        const thread = makeThread();
+        (thread as any).pullRequestThreadContext = {
+            iterationContext: { secondComparingIteration: 3 },
+        };
+        assert.strictEqual(provider.resolveSourceCommit(thread), undefined);
+    });
+
+    test('returns undefined when matching iteration not found', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [
+            { id: 1, sourceRefCommit: { commitId: 'abc' } } as any,
+        ]);
+        const thread = makeThread();
+        (thread as any).pullRequestThreadContext = {
+            iterationContext: { secondComparingIteration: 99 },
+        };
+        assert.strictEqual(provider.resolveSourceCommit(thread), undefined);
+    });
+
+    test('returns source commit when iteration is found', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [
+            { id: 1, sourceRefCommit: { commitId: 'aaa' } } as any,
+            { id: 2, sourceRefCommit: { commitId: 'bbb' } } as any,
+            { id: 3, sourceRefCommit: { commitId: 'ccc' } } as any,
+        ]);
+        const thread = makeThread();
+        (thread as any).pullRequestThreadContext = {
+            iterationContext: { secondComparingIteration: 2 },
+        };
+        assert.strictEqual(provider.resolveSourceCommit(thread), 'bbb');
+    });
+
+    test('returns undefined when iteration has no sourceRefCommit', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [
+            { id: 1 } as any,
+        ]);
+        const thread = makeThread();
+        (thread as any).pullRequestThreadContext = {
+            iterationContext: { secondComparingIteration: 1 },
+        };
+        assert.strictEqual(provider.resolveSourceCommit(thread), undefined);
+    });
+
+    test('stores and returns iterations', () => {
+        const provider = new PrContextProvider();
+        const iterations = [{ id: 1 } as any, { id: 2 } as any];
+        provider.setActivePr(makePr(), ['a.ts'], iterations);
+        assert.deepStrictEqual(provider.iterations, iterations);
+    });
+});

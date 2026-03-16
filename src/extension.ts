@@ -767,10 +767,6 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			outputChannel.appendLine(`[original-context] Context: iterationId=${ctx.iterationId}, filePath=${ctx.filePath}, lines=${ctx.startLine}-${ctx.endLine}, azdoThreadId=${ctx.azdoThread.id}`);
-			if (!ctx) {
-				vscode.window.showInformationMessage('Original context not available for this comment (no iteration info).');
-				return;
-			}
 
 			const iterations = activePrProvider?.iterations;
 			if (!iterations) {

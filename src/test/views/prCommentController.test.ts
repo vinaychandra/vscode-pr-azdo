@@ -230,4 +230,161 @@ suite('PrCommentController', () => {
         assert.strictEqual(controller.getDraftInfo(fakeThread), undefined);
         controller.dispose();
     });
+
+    // --- setPrContext ---
+
+    test('setPrContext enables PR context for operations', () => {
+        const controller = new PrCommentController(createMockLog());
+        const mockService = {} as any;
+        controller.setPrContext(mockService, 42, ['src/index.ts', 'README.md'], 'user-123');
+        // Should not throw
+        controller.dispose();
+    });
+
+    test('setPrContext with undefined clears context', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setPrContext({} as any, 42, ['a.ts']);
+        controller.setPrContext(undefined, undefined);
+        // Should not throw
+        controller.dispose();
+    });
+
+    test('setPrContext can be called multiple times', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setPrContext({} as any, 1, ['a.ts']);
+        controller.setPrContext({} as any, 2, ['b.ts', 'c.ts']);
+        controller.setPrContext(undefined, undefined);
+        controller.dispose();
+    });
+
+    // --- getThreadId ---
+
+    test('getThreadId returns undefined for unknown thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.getThreadId(fakeThread), undefined);
+        controller.dispose();
+    });
+
+    // --- findThreadForComment ---
+
+    test('findThreadForComment returns undefined when no threads exist', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeComment = { body: 'test', author: { name: 'Test' }, mode: 0 } as unknown as vscode.Comment;
+        assert.strictEqual(controller.findThreadForComment(fakeComment), undefined);
+        controller.dispose();
+    });
+
+    // --- getAzdoThread ---
+
+    test('getAzdoThread returns undefined for unknown thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.getAzdoThread(fakeThread), undefined);
+        controller.dispose();
+    });
+
+    // --- onDidPerformAction ---
+
+    test('onDidPerformAction event can be subscribed to', () => {
+        const controller = new PrCommentController(createMockLog());
+        let fired = false;
+        const sub = controller.onDidPerformAction(() => { fired = true; });
+        // Event doesn't fire yet — just verify subscription works
+        assert.strictEqual(fired, false);
+        sub.dispose();
+        controller.dispose();
+    });
+
+    // --- PR-level comments (virtual doc) ---
+
+    test('updateThreads with PR-level comments creates threads on virtual doc', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        const prLevelThread = makeThread({
+            id: 100,
+            threadContext: undefined,
+            comments: [
+                { content: 'General PR comment', author: { displayName: 'Eve' }, commentType: CommentType.Text, isDeleted: false },
+            ],
+        } as any);
+        controller.updateThreads([prLevelThread]);
+        // Should not throw
+        controller.dispose();
+    });
+
+    // --- Multiple thread types mixed ---
+
+    test('updateThreads handles mix of file and PR-level threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        controller.updateThreads([
+            makeThread({ id: 1 }),
+            makeThread({ id: 2, threadContext: undefined } as any),
+            makeThread({ id: 3, threadContext: { filePath: '/src/other.ts', rightFileStart: { line: 5, offset: 1 }, rightFileEnd: { line: 5, offset: 1 } } }),
+        ]);
+        controller.dispose();
+    });
+
+    // --- Thread with suggestion comments ---
+
+    test('updateThreads handles threads containing suggestions', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+        controller.updateThreads([
+            makeThread({
+                id: 10,
+                comments: [
+                    {
+                        content: 'Fix this:\n```suggestion\nconst x = 1;\n```',
+                        author: { displayName: 'Reviewer' },
+                        commentType: CommentType.Text,
+                        isDeleted: false,
+                    },
+                ],
+            } as any),
+        ]);
+        controller.dispose();
+    });
+
+    // --- Current user comment detection ---
+
+    test('setPrContext with userId enables own comment detection', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setPrContext({} as any, 42, ['src/index.ts'], 'user-abc');
+        controller.setReviewMode(true);
+        controller.updateThreads([
+            makeThread({
+                id: 50,
+                comments: [
+                    {
+                        content: 'My comment',
+                        author: { displayName: 'Me', id: 'user-abc' },
+                        commentType: CommentType.Text,
+                        isDeleted: false,
+                        publishedDate: new Date(),
+                    },
+                ],
+            } as any),
+        ]);
+        // Should not throw — own comment detection is internal
+        controller.dispose();
+    });
+
+    // --- createThreadOnUri ---
+
+    test('createThreadOnUri creates a read-only thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const uri = vscode.Uri.parse('file:///test');
+        const range = new vscode.Range(0, 0, 0, 0);
+        const comments: vscode.Comment[] = [{
+            body: new vscode.MarkdownString('test'),
+            mode: vscode.CommentMode.Preview,
+            author: { name: 'Test' },
+        }];
+        const thread = controller.createThreadOnUri(uri, range, comments);
+        assert.ok(thread);
+        assert.strictEqual(thread.comments.length, 1);
+        controller.dispose();
+    });
 });

@@ -50,9 +50,9 @@ suite('PullRequestTreeItem', () => {
         assert.strictEqual(item.label, '(untitled)');
     });
 
-    test('description shows PR number', () => {
+    test('description shows PR number and short author name', () => {
         const item = new PullRequestTreeItem(makePr());
-        assert.strictEqual(item.description, '#42');
+        assert.strictEqual(item.description, '#42 · Alice');
     });
 
     test('non-collapsible leaf node', () => {
@@ -98,5 +98,34 @@ suite('PullRequestTreeItem', () => {
         assert.ok(md.includes('Alice'));
         assert.ok(md.includes('feature/fix'));
         assert.ok(md.includes('main'));
+    });
+
+    test('description includes short author name (first name)', () => {
+        const item = new PullRequestTreeItem(makePr({
+            createdBy: { displayName: 'John Smith', ...({} as any) },
+        }));
+        assert.strictEqual(item.description, '#42 · John');
+    });
+
+    test('description uses full name when no space in display name', () => {
+        const item = new PullRequestTreeItem(makePr({
+            createdBy: { displayName: 'Alice', ...({} as any) },
+        }));
+        assert.strictEqual(item.description, '#42 · Alice');
+    });
+
+    test('description handles missing createdBy', () => {
+        const item = new PullRequestTreeItem(makePr({
+            createdBy: undefined,
+        }));
+        // Should not throw and should have some description
+        assert.ok(typeof item.description === 'string');
+    });
+
+    test('tooltip strips refs/heads/ from branch names', () => {
+        const item = new PullRequestTreeItem(makePr());
+        assert.ok(item.tooltip instanceof vscode.MarkdownString);
+        const md = (item.tooltip as vscode.MarkdownString).value;
+        assert.ok(!md.includes('refs/heads/'));
     });
 });

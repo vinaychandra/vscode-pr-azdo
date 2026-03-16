@@ -548,11 +548,11 @@ export class PrCommentController implements vscode.Disposable {
 
     private getRange(thread: GitPullRequestCommentThread): vscode.Range {
         const ctx = thread.threadContext;
-        // Use rightFileStart/End (the "after" side of the diff)
+        // Use rightFileStart/End (the "after" side of the diff), fall back to left side
         const startLine = ctx?.rightFileStart?.line ?? ctx?.leftFileStart?.line ?? 1;
-        const startCol = ctx?.rightFileStart?.offset ?? 1;
-        const endLine = ctx?.rightFileEnd?.line ?? startLine;
-        const endCol = ctx?.rightFileEnd?.offset ?? startCol;
+        const startCol = ctx?.rightFileStart?.offset ?? ctx?.leftFileStart?.offset ?? 1;
+        const endLine = ctx?.rightFileEnd?.line ?? ctx?.leftFileEnd?.line ?? startLine;
+        const endCol = ctx?.rightFileEnd?.offset ?? ctx?.leftFileEnd?.offset ?? startCol;
 
         // AzDO positions are 1-based, VS Code Range is 0-based
         return new vscode.Range(

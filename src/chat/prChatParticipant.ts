@@ -556,6 +556,7 @@ async function handleReview(
         if (!isQuick) {
             let draftCount = 0;
             let match: RegExpExecArray | null;
+            REVIEW_COMMENT_RE.lastIndex = 0;
             while ((match = REVIEW_COMMENT_RE.exec(fullText)) !== null) {
                 const [, file, lineStr, type, body] = match;
                 const line = parseInt(lineStr, 10);
