@@ -159,6 +159,11 @@ export function registerPrChatParticipant(
             return handleReview(request, stream, token, contextProvider, commentController, log, gitApi);
         }
 
+        // Route to standalone branch review (no active PR needed)
+        if (request.command === 'review-branch') {
+            return handleReviewBranch(request, stream, token, commentController, log, gitApi);
+        }
+
         // Build the LM messages
         const messages: vscode.LanguageModelChatMessage[] = [
             vscode.LanguageModelChatMessage.User(getPrompt('fixComment', DEFAULT_SYSTEM_PROMPT)),
@@ -409,7 +414,168 @@ export function registerPrChatParticipant(
 }
 
 /** Regex to parse [REVIEW_COMMENT] blocks from LM output. */
-const REVIEW_COMMENT_RE = /\[REVIEW_COMMENT\]\s*\nfile:\s*(.+)\nline:\s*(\d+)\ntype:\s*(\w+)\n---\n([\s\S]*?)\[\/REVIEW_COMMENT\]/g;
+export const REVIEW_COMMENT_RE = /\[REVIEW_COMMENT\]\s*\nfile:\s*(.+)\nline:\s*(\d+)\ntype:\s*(\w+)\n---\n([\s\S]*?)\[\/REVIEW_COMMENT\]/g;
+
+/**
+ * Handle /review-branch command.
+ * Reviews local changes against a chosen branch — works without an active PR.
+ * The target branch is passed via `request.prompt`.
+ */
+async function handleReviewBranch(
+    request: vscode.ChatRequest,
+    stream: vscode.ChatResponseStream,
+    token: vscode.CancellationToken,
+    commentCtrl: PrCommentController,
+    log: vscode.OutputChannel,
+    gitApi?: API,
+): Promise<vscode.ChatResult> {
+    const repo = gitApi?.repositories[0];
+    if (!repo) {
+        stream.markdown('No git repository found.');
+        return { metadata: {} };
+    }
+
+    const currentBranch = repo.state.HEAD?.name ?? '(detached)';
+    const cwd = repo.rootUri.fsPath;
+
+    // The target branch is passed as the prompt text (set by the standaloneReview command)
+    const targetBranch = request.prompt.trim() || 'main';
+    const targetRef = `origin/${targetBranch}`;
+
+    stream.progress(`Computing diff: ${currentBranch} vs ${targetBranch}…`);
+    log.appendLine(`[chat/review-branch] Reviewing ${currentBranch} against ${targetRef}`);
+
+    let diffOutput: string;
+    try {
+        diffOutput = await runGitDiff(cwd, targetRef, []);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.appendLine(`[chat/review-branch] git diff failed: ${msg}`);
+        stream.markdown(`⚠️ Failed to compute diff against \`${targetRef}\`.\n\nMake sure the branch is fetched locally (\`git fetch origin ${targetBranch}\`).\n\n\`\`\`\n${msg}\n\`\`\``);
+        return { metadata: {} };
+    }
+
+    if (!diffOutput.trim()) {
+        stream.markdown(`No differences found between **${currentBranch}** and **${targetBranch}**. The working copy matches the target.`);
+        return { metadata: {} };
+    }
+
+    stream.markdown(`Reviewing **${currentBranch}** against **${targetBranch}**…\n\n`);
+
+    const systemPrompt = getPrompt('review', DEFAULT_REVIEW_PROMPT);
+    const messages: vscode.LanguageModelChatMessage[] = [
+        vscode.LanguageModelChatMessage.User(systemPrompt),
+    ];
+
+    if (cwd) {
+        messages.push(vscode.LanguageModelChatMessage.User(
+            `The workspace root is: ${cwd}\nIMPORTANT: When calling tools like copilot_readFile, use ABSOLUTE paths by prepending the workspace root. For example, to read src/index.ts, use ${cwd}/src/index.ts`,
+        ));
+    }
+
+    messages.push(vscode.LanguageModelChatMessage.User(
+        `## Code Review Request\n\n` +
+        `**Branch:** ${currentBranch} (compared against ${targetBranch})\n\n` +
+        `## Diff\n\n\`\`\`diff\n${diffOutput}\n\`\`\``,
+    ));
+
+    stream.progress('Reviewing changes…');
+
+    try {
+        const tools = getChatTools();
+
+        const response = await request.model.sendRequest(messages, {
+            justification: 'Reviewing branch changes',
+            tools,
+            toolMode: vscode.LanguageModelChatToolMode.Auto,
+        }, token);
+
+        let fullText = '';
+        const MAX_TOOL_ROUNDS = 100;
+        let currentResponse = response;
+
+        for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+            const pendingCalls: vscode.LanguageModelToolCallPart[] = [];
+            let roundText = '';
+
+            for await (const chunk of currentResponse.stream) {
+                if (chunk instanceof vscode.LanguageModelTextPart) {
+                    stream.markdown(chunk.value);
+                    fullText += chunk.value;
+                    roundText += chunk.value;
+                } else if (chunk instanceof vscode.LanguageModelToolCallPart) {
+                    pendingCalls.push(chunk);
+                }
+            }
+
+            if (pendingCalls.length === 0) {
+                break;
+            }
+
+            if (roundText) {
+                messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
+            }
+
+            for (const call of pendingCalls) {
+                log.appendLine(`[chat/review-branch] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
+                stream.progress(`Using ${call.name}…`);
+                try {
+                    const result = await vscode.lm.invokeTool(call.name, {
+                        input: call.input,
+                        toolInvocationToken: undefined,
+                    }, token);
+                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
+                    messages.push(vscode.LanguageModelChatMessage.User([
+                        new vscode.LanguageModelToolResultPart(call.callId, result.content),
+                    ]));
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
+                    messages.push(vscode.LanguageModelChatMessage.User([
+                        new vscode.LanguageModelToolResultPart(call.callId, [
+                            new vscode.LanguageModelTextPart(`Error: ${msg}`),
+                        ]),
+                    ]));
+                }
+            }
+
+            currentResponse = await request.model.sendRequest(messages, {
+                justification: 'Continuing review after tool use',
+                tools,
+                toolMode: vscode.LanguageModelChatToolMode.Auto,
+            }, token);
+        }
+
+        // Parse [REVIEW_COMMENT] blocks and create draft threads
+        let draftCount = 0;
+        let match: RegExpExecArray | null;
+        REVIEW_COMMENT_RE.lastIndex = 0;
+        while ((match = REVIEW_COMMENT_RE.exec(fullText)) !== null) {
+            const [, file, lineStr, type, body] = match;
+            const line = parseInt(lineStr, 10);
+            if (file && !isNaN(line) && body) {
+                commentCtrl.createDraftThread(file.trim(), line, body.trim(), type?.trim());
+                draftCount++;
+            }
+        }
+
+        if (draftCount > 0) {
+            stream.markdown(`\n\n---\n\n✨ Created **${draftCount}** draft comment(s) inline on files. Open the files to review them.`);
+            stream.button({
+                command: 'vscode-pr-azdo.clearDrafts',
+                title: '🗑️ Clear All Drafts',
+            });
+        }
+
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.appendLine(`[chat/review-branch] Review error: ${msg}`);
+        stream.markdown(`\n\n⚠️ Error during review: ${msg}`);
+        return { errorDetails: { message: msg } };
+    }
+
+    return { metadata: {} };
+}
 
 /**
  * Handle /review and /review-quick commands.
@@ -588,7 +754,7 @@ async function handleReview(
 /**
  * Run `git diff` against a target ref for the specified files.
  */
-function runGitDiff(cwd: string, targetRef: string, filePaths: string[]): Promise<string> {
+export function runGitDiff(cwd: string, targetRef: string, filePaths: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
         execFile(
             'git',

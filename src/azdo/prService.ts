@@ -164,4 +164,26 @@ export class PullRequestService {
             this.remoteInfo.project,
         );
     }
+
+    /** Create a new pull request. Returns the created PR. */
+    async createPullRequest(
+        sourceBranch: string,
+        targetBranch: string,
+        title: string,
+        description?: string,
+        isDraft?: boolean,
+    ): Promise<GitPullRequest> {
+        const git = await this.apiClient.getGitApi();
+        return git.createPullRequest(
+            {
+                sourceRefName: `refs/heads/${sourceBranch}`,
+                targetRefName: `refs/heads/${targetBranch}`,
+                title,
+                description: description ?? '',
+                isDraft: isDraft ?? false,
+            },
+            this.remoteInfo.repositoryName,
+            this.remoteInfo.project,
+        );
+    }
 }

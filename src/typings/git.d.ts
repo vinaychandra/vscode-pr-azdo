@@ -22,11 +22,24 @@ export interface Repository {
     readonly state: RepositoryState;
     checkout(treeish: string): Promise<void>;
     fetch(remote?: string, ref?: string): Promise<void>;
+    push(remoteName?: string, branchName?: string, setUpstream?: boolean): Promise<void>;
+    add(resources: Uri[]): Promise<void>;
+    commit(message: string): Promise<void>;
+}
+
+export interface Change {
+    readonly uri: Uri;
+    readonly originalUri: Uri;
+    readonly renameUri: Uri | undefined;
+    readonly status: number;
 }
 
 export interface RepositoryState {
     readonly HEAD: Branch | undefined;
     readonly remotes: readonly Remote[];
+    readonly indexChanges: readonly Change[];
+    readonly workingTreeChanges: readonly Change[];
+    readonly mergeChanges: readonly Change[];
     readonly onDidChange: Event<void>;
 }
 

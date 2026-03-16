@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI, deleteLocalBranch } from './git/gitExtension';
+import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
@@ -7,13 +7,13 @@ import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import { FileChangeItem, FolderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
-import { PrDetailPanel } from './views/prDetailPanel';
+import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT } from './chat/prChatParticipant';
+import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
@@ -973,6 +973,323 @@ export async function activate(context: vscode.ExtensionContext) {
 					}
 				}
 			}
+		}),
+	);
+
+	// --- Create PR in Azure DevOps ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.createPullRequest', async () => {
+			outputChannel.appendLine('[create-pr] Command invoked');
+
+			const info = detector.currentRemoteInfo;
+			if (!info) {
+				outputChannel.appendLine('[create-pr] ABORT: No Azure DevOps remote detected');
+				vscode.window.showWarningMessage('No Azure DevOps remote detected.');
+				return;
+			}
+			if (!apiClient || !prService) {
+				outputChannel.appendLine('[create-pr] ABORT: Not connected to Azure DevOps');
+				vscode.window.showWarningMessage('Not connected to Azure DevOps. Please sign in first.');
+				return;
+			}
+			const repo = gitApi?.repositories[0];
+			const currentBranch = repo?.state.HEAD?.name;
+			if (!repo || !currentBranch) {
+				outputChannel.appendLine(`[create-pr] ABORT: No branch checked out (HEAD=${repo?.state.HEAD?.name ?? 'undefined'})`);
+				vscode.window.showWarningMessage('No branch checked out (detached HEAD or unknown).');
+				return;
+			}
+
+			outputChannel.appendLine(`[create-pr] Current branch: ${currentBranch}, remote: ${info.remoteName}`);
+
+			// Check for uncommitted changes
+			const workingChanges = repo.state.workingTreeChanges?.length ?? 0;
+			const indexChanges = repo.state.indexChanges?.length ?? 0;
+			const mergeChanges = repo.state.mergeChanges?.length ?? 0;
+			const totalDirty = workingChanges + indexChanges + mergeChanges;
+			outputChannel.appendLine(`[create-pr] Working tree: ${workingChanges} changed, ${indexChanges} staged, ${mergeChanges} merge conflicts`);
+
+			if (mergeChanges > 0) {
+				outputChannel.appendLine('[create-pr] ABORT: Merge conflicts detected');
+				vscode.window.showErrorMessage('Cannot create PR: resolve merge conflicts first.');
+				return;
+			}
+
+			if (totalDirty > 0) {
+				outputChannel.appendLine(`[create-pr] ${totalDirty} uncommitted change(s) detected — prompting user`);
+				const action = await vscode.window.showWarningMessage(
+					`You have ${totalDirty} uncommitted change(s). What would you like to do?`,
+					{ modal: true },
+					'Commit All & Continue',
+				);
+
+				if (action !== 'Commit All & Continue') {
+					outputChannel.appendLine('[create-pr] User cancelled at uncommitted changes prompt');
+					return;
+				}
+
+				// Prompt for commit message
+				const commitMsg = await vscode.window.showInputBox({
+					prompt: 'Commit message',
+					placeHolder: 'Enter a commit message for your changes',
+					value: currentBranch,
+				});
+				if (!commitMsg) {
+					outputChannel.appendLine('[create-pr] User cancelled at commit message prompt');
+					return;
+				}
+
+				try {
+					outputChannel.appendLine(`[create-pr] Running git add -A && git commit -m "${commitMsg}"`);
+					await gitCommitAll(repo.rootUri.fsPath, commitMsg);
+					outputChannel.appendLine('[create-pr] Commit succeeded');
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[create-pr] Commit failed: ${msg}`);
+					outputChannel.show();
+					vscode.window.showErrorMessage(`Failed to commit changes: ${msg}`);
+					return;
+				}
+			}
+
+			// Determine default target branch from the repo or fall back to main
+			let defaultTarget = 'main';
+			try {
+				const gitApiClient = await apiClient.getGitApi();
+				const repoInfo = await gitApiClient.getRepository(info.repositoryName, info.project);
+				const defBranch = repoInfo?.defaultBranch?.replace(/^refs\/heads\//, '');
+				if (defBranch) { defaultTarget = defBranch; }
+				outputChannel.appendLine(`[create-pr] Default target branch from remote: ${defaultTarget}`);
+			} catch (err) {
+				outputChannel.appendLine(`[create-pr] Could not fetch default branch (using '${defaultTarget}'): ${err}`);
+			}
+
+			const targetBranch = await vscode.window.showInputBox({
+				prompt: 'Target branch for the pull request',
+				value: defaultTarget,
+				placeHolder: 'e.g. main',
+			});
+			if (!targetBranch) {
+				outputChannel.appendLine('[create-pr] User cancelled at target branch prompt');
+				return;
+			}
+
+			outputChannel.appendLine(`[create-pr] Target branch: ${targetBranch}`);
+
+			await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: `Creating pull request: ${currentBranch} → ${targetBranch}`,
+					cancellable: false,
+				},
+				async (progress) => {
+					const remoteName = info.remoteName;
+
+					// 1. Push current branch to remote
+					progress.report({ message: 'Pushing branch to remote…' });
+					outputChannel.appendLine(`[create-pr] Pushing ${currentBranch} to ${remoteName} (set-upstream=true)`);
+					try {
+						await repo.push(remoteName, currentBranch, true);
+						outputChannel.appendLine('[create-pr] Push succeeded');
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						outputChannel.appendLine(`[create-pr] Push FAILED: ${msg}`);
+						outputChannel.show();
+						vscode.window.showErrorMessage(`Failed to push branch: ${msg}`);
+						return;
+					}
+
+					// 2. Generate AI title and description from diff + commits
+					progress.report({ message: 'Generating PR description with AI…' });
+					outputChannel.appendLine('[create-pr] Generating AI title and description…');
+					let aiTitle = currentBranch;
+					let aiDescription = '';
+
+					try {
+						const cwd = repo.rootUri.fsPath;
+						const targetRef = `${remoteName}/${targetBranch}`;
+
+						outputChannel.appendLine(`[create-pr] Fetching diff and commit log against ${targetRef}`);
+						const [diffOutput, commitLog] = await Promise.all([
+							runGitDiff(cwd, targetRef, []).catch(e => { outputChannel.appendLine(`[create-pr] Diff failed: ${e}`); return ''; }),
+							getCommitLog(cwd, targetRef).catch(e => { outputChannel.appendLine(`[create-pr] Commit log failed: ${e}`); return ''; }),
+						]);
+						outputChannel.appendLine(`[create-pr] Diff: ${diffOutput.length} chars, Commits: ${commitLog.split('\n').length} lines`);
+
+						if (diffOutput || commitLog) {
+							const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+							const model = models[0];
+							if (model) {
+								outputChannel.appendLine(`[create-pr] Using LM model: ${model.name ?? model.id}`);
+								const prompt = [
+									'Generate a pull request title and description for the following changes.',
+									'',
+									'Rules:',
+									'- The title should be a concise one-line summary (max 80 chars)',
+									'- The description should explain WHAT changed and WHY, written in markdown',
+									'- Include a brief summary section and a list of key changes',
+									'- Be specific and technical, not generic',
+									'- Do NOT include a heading (the title IS the heading)',
+									'',
+									'Output format (EXACTLY):',
+									'TITLE: <your title here>',
+									'DESCRIPTION:',
+									'<your description here>',
+								].join('\n');
+
+								let contextInfo = `Branch: ${currentBranch} → ${targetBranch}\n`;
+								if (commitLog) {
+									contextInfo += `\nCommits:\n${commitLog}\n`;
+								}
+								const maxDiffLen = 50_000;
+								const truncatedDiff = diffOutput.length > maxDiffLen
+									? diffOutput.substring(0, maxDiffLen) + '\n... (diff truncated)'
+									: diffOutput;
+								if (truncatedDiff) {
+									contextInfo += `\nDiff:\n\`\`\`diff\n${truncatedDiff}\n\`\`\``;
+								}
+
+								const messages = [
+									vscode.LanguageModelChatMessage.User(prompt),
+									vscode.LanguageModelChatMessage.User(contextInfo),
+								];
+
+								const response = await model.sendRequest(messages, {
+									justification: 'Generating pull request description',
+								});
+
+								let fullText = '';
+								for await (const chunk of response.stream) {
+									if (chunk instanceof vscode.LanguageModelTextPart) {
+										fullText += chunk.value;
+									}
+								}
+
+								outputChannel.appendLine(`[create-pr] LM response (${fullText.length} chars)`);
+
+								const titleMatch = fullText.match(/^TITLE:\s*(.+)/m);
+								const descMatch = fullText.match(/DESCRIPTION:\s*\n([\s\S]*)/m);
+								if (titleMatch) { aiTitle = titleMatch[1].trim(); }
+								if (descMatch) { aiDescription = descMatch[1].trim(); }
+
+								outputChannel.appendLine(`[create-pr] AI title: ${aiTitle}`);
+								outputChannel.appendLine(`[create-pr] AI description: ${aiDescription.length} chars`);
+							} else {
+								outputChannel.appendLine('[create-pr] No LM model available — using branch name as title');
+							}
+						} else {
+							outputChannel.appendLine('[create-pr] No diff or commits — using branch name as title');
+						}
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						outputChannel.appendLine(`[create-pr] AI generation failed (non-critical): ${msg}`);
+					}
+
+					// 3. Let user review/edit the title
+					const finalTitle = await vscode.window.showInputBox({
+						prompt: 'Pull request title',
+						value: aiTitle,
+						placeHolder: 'Enter a title for the pull request',
+					});
+					if (!finalTitle) {
+						outputChannel.appendLine('[create-pr] User cancelled at title prompt');
+						return;
+					}
+
+					// 4. Create the PR via AzDO API
+					progress.report({ message: 'Creating pull request…' });
+					outputChannel.appendLine(`[create-pr] Creating PR: "${finalTitle}" (${currentBranch} → ${targetBranch})`);
+					try {
+						const createdPr = await prService!.createPullRequest(
+							currentBranch,
+							targetBranch,
+							finalTitle,
+							aiDescription,
+						);
+
+						const prId = createdPr.pullRequestId!;
+						outputChannel.appendLine(`[create-pr] ✓ PR #${prId} created successfully`);
+
+						// 5. Always open the PR detail panel + offer browser
+						PrDetailPanel.createOrShow(createdPr, context.extensionUri, apiClient!, info, outputChannel);
+
+						const webUrl = buildPrWebUrl(info, prId);
+						const choice = await vscode.window.showInformationMessage(
+							`PR #${prId} created: ${finalTitle}`,
+							'Open in Browser',
+						);
+						if (choice === 'Open in Browser') {
+							void vscode.env.openExternal(vscode.Uri.parse(webUrl));
+						}
+
+						// Refresh tree views — fetch first so Git extension picks up the new remote state
+						outputChannel.appendLine('[create-pr] Fetching remote to sync tracking info…');
+						try {
+							await repo.fetch(remoteName);
+						} catch {
+							// Non-critical — refresh will still work via API
+						}
+						treeProvider?.refresh();
+						activePrProvider?.refresh();
+						outputChannel.appendLine('[create-pr] Tree views refreshed');
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						outputChannel.appendLine(`[create-pr] API create FAILED: ${msg}`);
+						outputChannel.show();
+						const fallback = await vscode.window.showErrorMessage(
+							`Failed to create PR via API: ${msg}`,
+							'Open in Browser',
+						);
+						if (fallback === 'Open in Browser') {
+							const url = buildCreatePrUrl(info, currentBranch, targetBranch);
+							void vscode.env.openExternal(vscode.Uri.parse(url));
+						}
+					}
+				},
+			);
+		}),
+	);
+
+	// --- Standalone AI Review (no active PR needed) ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.standaloneReview', async () => {
+			const repo = gitApi?.repositories[0];
+			if (!repo) {
+				vscode.window.showWarningMessage('No git repository found.');
+				return;
+			}
+			const currentBranch = repo.state.HEAD?.name;
+			if (!currentBranch) {
+				vscode.window.showWarningMessage('No branch checked out (detached HEAD or unknown).');
+				return;
+			}
+
+			// Determine default target branch
+			let defaultTarget = 'main';
+			const info = detector.currentRemoteInfo;
+			try {
+				if (apiClient && info) {
+					const gitApiClient = await apiClient.getGitApi();
+					const repoInfo = await gitApiClient.getRepository(info.repositoryName, info.project);
+					const defBranch = repoInfo?.defaultBranch?.replace(/^refs\/heads\//, '');
+					if (defBranch) { defaultTarget = defBranch; }
+				}
+			} catch {
+				// Non-critical — use 'main' as fallback
+			}
+
+			const targetBranch = await vscode.window.showInputBox({
+				prompt: 'Compare against which branch?',
+				value: defaultTarget,
+				placeHolder: 'e.g. main, master, develop',
+			});
+			if (!targetBranch) { return; }
+
+			// Open Copilot Chat with @azdo-pr /review-branch <branch>
+			outputChannel.appendLine(`[ext] Opening chat for standalone review against ${targetBranch}`);
+			await vscode.commands.executeCommand('workbench.action.chat.open', {
+				query: `@azdo-pr /review-branch ${targetBranch}`,
+			});
 		}),
 	);
 

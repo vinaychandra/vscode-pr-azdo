@@ -115,6 +115,15 @@ export function buildPrWebUrl(remoteInfo: AzDoRemoteInfo, prId: number): string 
     return `https://dev.azure.com/${encodeURIComponent(remoteInfo.organization)}/${encodeURIComponent(remoteInfo.project)}/_git/${encodeURIComponent(remoteInfo.repositoryName)}/pullrequest/${prId}`;
 }
 
+/**
+ * Build a URL to the Azure DevOps "Create Pull Request" page.
+ * @param sourceBranch Short branch name (e.g. "feature/x"), not "refs/heads/...".
+ * @param targetBranch Short branch name for the target (e.g. "main").
+ */
+export function buildCreatePrUrl(remoteInfo: AzDoRemoteInfo, sourceBranch: string, targetBranch: string): string {
+    return `https://dev.azure.com/${encodeURIComponent(remoteInfo.organization)}/${encodeURIComponent(remoteInfo.project)}/_git/${encodeURIComponent(remoteInfo.repositoryName)}/pullrequestcreate?sourceRef=${encodeURIComponent(sourceBranch)}&targetRef=${encodeURIComponent(targetBranch)}`;
+}
+
 export function escapeHtml(text: string): string {
     return text
         .replace(/&/g, '&amp;')

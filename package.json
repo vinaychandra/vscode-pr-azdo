@@ -49,7 +49,7 @@
     "viewsWelcome": [
       {
         "view": "azdo-pr.activePr",
-        "contents": "No pull request found for the current branch.",
+        "contents": "No pull request found for the current branch.\n\n[$(sparkle) Perform AI Review](command:vscode-pr-azdo.standaloneReview)\n\n[$(git-pull-request-create) Create Pull Request](command:vscode-pr-azdo.createPullRequest)",
         "when": "vscode-pr-azdo:hasAzDoRepo && vscode-pr-azdo:isAuthenticated && !vscode-pr-azdo:hasActivePr"
       },
       {
@@ -199,6 +199,16 @@
         "command": "vscode-pr-azdo.deleteBranch",
         "title": "Delete Local Branch",
         "icon": "$(trash)"
+      },
+      {
+        "command": "vscode-pr-azdo.createPullRequest",
+        "title": "Create Pull Request",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "vscode-pr-azdo.standaloneReview",
+        "title": "Perform AI Review",
+        "icon": "$(sparkle)"
       }
     ],
     "menus": {
@@ -216,6 +226,16 @@
         {
           "command": "vscode-pr-azdo.reviewWithAI",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.standaloneReview",
+          "when": "view == azdo-pr.activePr && !vscode-pr-azdo:hasActivePr && vscode-pr-azdo:hasAzDoRepo",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.createPullRequest",
+          "when": "view == azdo-pr.activePr && !vscode-pr-azdo:hasActivePr && vscode-pr-azdo:hasAzDoRepo",
           "group": "navigation"
         },
         {
@@ -353,6 +373,10 @@
           {
             "name": "review-quick",
             "description": "Quick summary of PR changes and key concerns"
+          },
+          {
+            "name": "review-branch",
+            "description": "Review changes on the current branch against a target branch (no PR needed)"
           }
         ]
       }

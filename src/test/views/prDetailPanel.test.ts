@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { escapeHtml, voteLabel, prStatusLabel, mergeStatusLabel, buildPrWebUrl, buildHtml } from '../../views/prDetailPanel';
+import { escapeHtml, voteLabel, prStatusLabel, mergeStatusLabel, buildPrWebUrl, buildCreatePrUrl, buildHtml } from '../../views/prDetailPanel';
 import { PullRequestStatus, PullRequestAsyncStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoRemoteInfo } from '../../azdo/remoteInfo';
@@ -139,6 +139,50 @@ suite('buildPrWebUrl', () => {
         assert.ok(url.includes('my%20org'));
         assert.ok(url.includes('my%20project'));
         assert.ok(url.includes('my%20repo'));
+    });
+});
+
+suite('buildCreatePrUrl', () => {
+    const remoteInfo: AzDoRemoteInfo = {
+        organization: 'myorg',
+        project: 'myproject',
+        repositoryName: 'myrepo',
+        remoteUrl: 'https://dev.azure.com/myorg/myproject/_git/myrepo',
+        remoteName: 'origin',
+        apiBaseUrl: 'https://dev.azure.com/myorg',
+    };
+
+    test('builds correct create-PR URL', () => {
+        const url = buildCreatePrUrl(remoteInfo, 'feature/x', 'main');
+        assert.strictEqual(
+            url,
+            'https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequestcreate?sourceRef=feature%2Fx&targetRef=main',
+        );
+    });
+
+    test('encodes special characters in branch names', () => {
+        const url = buildCreatePrUrl(remoteInfo, 'my branch', 'main target');
+        assert.ok(url.includes('sourceRef=my%20branch'));
+        assert.ok(url.includes('targetRef=main%20target'));
+    });
+
+    test('encodes special characters in org/project/repo', () => {
+        const info: AzDoRemoteInfo = {
+            ...remoteInfo,
+            organization: 'my org',
+            project: 'my project',
+            repositoryName: 'my repo',
+        };
+        const url = buildCreatePrUrl(info, 'feat', 'main');
+        assert.ok(url.includes('my%20org'));
+        assert.ok(url.includes('my%20project'));
+        assert.ok(url.includes('my%20repo'));
+    });
+
+    test('handles simple branch names', () => {
+        const url = buildCreatePrUrl(remoteInfo, 'develop', 'main');
+        assert.ok(url.includes('sourceRef=develop'));
+        assert.ok(url.includes('targetRef=main'));
     });
 });
 

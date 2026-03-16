@@ -55,3 +55,46 @@ export function deleteLocalBranch(repoRoot: string, branchName: string, force = 
         });
     });
 }
+
+/**
+ * Get the commit log between a target ref and HEAD.
+ * Returns the log as a string (one line per commit: hash + subject).
+ */
+export function getCommitLog(repoRoot: string, targetRef: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        execFile(
+            'git',
+            ['log', '--oneline', `${targetRef}..HEAD`],
+            { cwd: repoRoot, maxBuffer: 1024 * 1024, encoding: 'utf-8' },
+            (err, stdout) => {
+                if (err) {
+                    reject(new Error(err.message));
+                } else {
+                    resolve(stdout.trim());
+                }
+            },
+        );
+    });
+}
+
+/**
+ * Stage all changes and commit with the given message.
+ * Uses `git add -A` + `git commit -m` via child_process.
+ */
+export function gitCommitAll(repoRoot: string, message: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        execFile('git', ['add', '-A'], { cwd: repoRoot }, (addErr) => {
+            if (addErr) {
+                reject(new Error(`git add failed: ${addErr.message}`));
+                return;
+            }
+            execFile('git', ['commit', '-m', message], { cwd: repoRoot }, (commitErr, _stdout, stderr) => {
+                if (commitErr) {
+                    reject(new Error(stderr.trim() || commitErr.message));
+                } else {
+                    resolve();
+                }
+            });
+        });
+    });
+}
