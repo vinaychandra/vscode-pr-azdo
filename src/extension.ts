@@ -94,6 +94,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	let activePrProvider: ActivePrTreeDataProvider | undefined;
 	let activePrProviderSub: vscode.Disposable | undefined;
 	let activePrCommentSub: vscode.Disposable | undefined;
+	let activePrTreeView: vscode.TreeView<ActivePrTreeItem> | undefined;
 
 	// Inline comment controller — lives for the extension's lifetime
 	const commentController = new PrCommentController(outputChannel, gitApi);
@@ -131,6 +132,9 @@ export async function activate(context: vscode.ExtensionContext) {
 		commentController.setReviewMode(reviewMode);
 		activePrProvider?.setReviewMode(reviewMode);
 		updateReviewModeUi(!!activePrProvider?._activePrForContext);
+		if (activePrTreeView) {
+			activePrTreeView.description = reviewMode ? 'reviewing' : '';
+		}
 	}
 
 	context.subscriptions.push(
@@ -293,7 +297,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	// --- Active PR tree view ---
-	const activePrTreeView = vscode.window.createTreeView<ActivePrTreeItem>('azdo-pr.activePr', {
+	activePrTreeView = vscode.window.createTreeView<ActivePrTreeItem>('azdo-pr.activePr', {
 		treeDataProvider: {
 			onDidChangeTreeData: activePrProxyEmitter.event,
 			getTreeItem(element: ActivePrTreeItem) {
@@ -907,6 +911,13 @@ export async function activate(context: vscode.ExtensionContext) {
 					},
 				);
 				outputChannel.appendLine(`[checkout] Successfully checked out ${branchName}`);
+				// Enable review mode by default when checking out a PR branch
+				if (!reviewMode) {
+					reviewMode = true;
+					void context.workspaceState.update('reviewMode', true);
+					outputChannel.appendLine('[checkout] Enabled review mode for checked-out PR');
+					applyReviewMode();
+				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				outputChannel.appendLine(`[checkout] Failed: ${msg}`);

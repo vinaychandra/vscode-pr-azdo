@@ -5,6 +5,7 @@ import {
     FolderItem,
     FileChangeItem,
     ActivePrRootItem,
+    ReviewModeToggleItem,
     SectionHeaderItem,
     CommitItem,
     CommentThreadItem,
@@ -156,6 +157,41 @@ suite('ActivePrRootItem', () => {
         const item = new ActivePrRootItem(pr);
         assert.ok(item.command);
         assert.strictEqual(item.command.command, 'vscode-pr-azdo.openPullRequest');
+    });
+});
+
+suite('ReviewModeToggleItem', () => {
+    test('shows "Enable Review" when review mode OFF', () => {
+        const item = new ReviewModeToggleItem(false, 5);
+        assert.strictEqual(item.label, 'Enable Review');
+        assert.strictEqual(item.description, '5 threads');
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'eye-closed');
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.None);
+    });
+
+    test('shows "Disable Review" when review mode ON', () => {
+        const item = new ReviewModeToggleItem(true, 3);
+        assert.strictEqual(item.label, 'Disable Review');
+        assert.strictEqual(item.description, '3 threads');
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'eye');
+    });
+
+    test('singular thread label for 1 thread', () => {
+        const item = new ReviewModeToggleItem(false, 1);
+        assert.strictEqual(item.description, '1 thread');
+    });
+
+    test('empty description for 0 threads', () => {
+        const item = new ReviewModeToggleItem(false, 0);
+        assert.strictEqual(item.description, '');
+    });
+
+    test('has toggle review mode command', () => {
+        const item = new ReviewModeToggleItem(false, 2);
+        assert.ok(item.command);
+        assert.strictEqual(item.command.command, 'vscode-pr-azdo.toggleReviewMode');
     });
 });
 

@@ -24,6 +24,27 @@ export class ActivePrRootItem extends vscode.TreeItem {
 }
 
 // ---------------------------------------------------------------------------
+// Review mode toggle (root-level clickable item)
+// ---------------------------------------------------------------------------
+
+export class ReviewModeToggleItem extends vscode.TreeItem {
+    constructor(reviewMode: boolean, threadCount: number) {
+        const label = reviewMode ? 'Disable Review' : 'Enable Review';
+        super(label, vscode.TreeItemCollapsibleState.None);
+        this.description = threadCount > 0 ? `${threadCount} thread${threadCount === 1 ? '' : 's'}` : '';
+        this.iconPath = new vscode.ThemeIcon(reviewMode ? 'eye' : 'eye-closed');
+        this.contextValue = 'activePr.reviewModeToggle';
+        this.tooltip = reviewMode
+            ? 'Click to disable review mode — hides comments and disables new comments'
+            : 'Click to enable review mode — shows comments and allows adding new ones';
+        this.command = {
+            command: 'vscode-pr-azdo.toggleReviewMode',
+            title: 'Toggle Review Mode',
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Section headers (Files / Commits)
 // ---------------------------------------------------------------------------
 
@@ -170,6 +191,7 @@ export class CommitItem extends vscode.TreeItem {
 
 export type ActivePrTreeItem =
     | ActivePrRootItem
+    | ReviewModeToggleItem
     | SectionHeaderItem
     | FolderItem
     | FileChangeItem

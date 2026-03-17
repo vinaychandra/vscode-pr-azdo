@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { ActivePrTreeDataProvider, type CommentFilter } from '../../views/activePrTreeDataProvider';
+import { ActivePrRootItem, ReviewModeToggleItem } from '../../views/activePrTreeItems';
 import { CommentThreadStatus, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequestCommentThread, GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../../azdo/prService';
@@ -307,9 +308,10 @@ async function createProviderWithThreads(threads: GitPullRequestCommentThread[])
     // Trigger detection + data loading
     await provider.detectActivePr();
     const roots = await provider.getChildren();
-    // Expand the root to trigger ensureData → loadThreads
-    if (roots.length > 0) {
-        await provider.getChildren(roots[0]);
+    // Expand the ActivePrRootItem (index 1, after ReviewModeToggleItem) to trigger ensureData → loadThreads
+    const prRoot = roots.find(r => r instanceof ActivePrRootItem);
+    if (prRoot) {
+        await provider.getChildren(prRoot);
     }
 
     return provider;

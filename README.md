@@ -110,6 +110,12 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
+### 0.0.2
+
+- **Review mode toggle in tree view** — "Enable Review" / "Disable Review" button at the top of the Active PR view with thread count, replacing the hidden eye icon as the primary toggle
+- **Auto-enable review on checkout** — checking out a PR branch via the sidebar automatically enables review mode
+- **Tree view description** — Active PR view header shows "reviewing" when review mode is on
+
 ### 0.0.1
 
 Initial development release:

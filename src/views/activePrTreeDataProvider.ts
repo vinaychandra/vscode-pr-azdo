@@ -5,6 +5,7 @@ import type { PullRequestService } from '../azdo/prService';
 import type { API } from '../typings/git';
 import {
     ActivePrRootItem,
+    ReviewModeToggleItem,
     SectionHeaderItem,
     FolderItem,
     FileChangeItem,
@@ -296,9 +297,12 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             return [];
         }
 
-        // Root level → PR root item
+        // Root level → review toggle + PR root item
         if (!element) {
-            return [new ActivePrRootItem(this._activePr)];
+            return [
+                new ReviewModeToggleItem(this._reviewMode, this._allThreads?.length ?? 0),
+                new ActivePrRootItem(this._activePr),
+            ];
         }
 
         // PR root → Files + Commits sections
