@@ -110,9 +110,10 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
-### Unreleased
+### 0.0.3
 
 - **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click (complements the built-in collapse-all)
+- **Concise review comments** — AI review prompt tuned to produce shorter, non-repetitive comments
 
 ### 0.0.2
 

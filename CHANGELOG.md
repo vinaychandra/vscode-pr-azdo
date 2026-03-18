@@ -6,7 +6,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.3]
+
 - **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click
+- **Concise review comments** — AI review prompt updated to produce shorter, non-repetitive comments
 
 ## [0.0.2]
 
