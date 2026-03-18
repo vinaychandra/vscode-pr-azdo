@@ -99,6 +99,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "vscode-pr-azdo.expandAll",
+        "title": "Expand All",
+        "icon": "$(expand-all)"
+      },
+      {
         "command": "vscode-pr-azdo.openPullRequest",
         "title": "Open Pull Request"
       },
@@ -223,6 +228,11 @@
         {
           "command": "vscode-pr-azdo.refreshActivePr",
           "when": "view == azdo-pr.activePr",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.expandAll",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
           "group": "navigation"
         },
         {

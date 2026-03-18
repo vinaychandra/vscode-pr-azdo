@@ -292,6 +292,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         return element;
     }
 
+    /**
+     * Required by {@link vscode.TreeView.reveal}. Always returns `undefined`
+     * because we only reveal root-level items which have no parent.
+     */
+    getParent(): undefined {
+        return undefined;
+    }
+
     async getChildren(element?: ActivePrTreeItem): Promise<ActivePrTreeItem[]> {
         if (!this._activePr) {
             return [];

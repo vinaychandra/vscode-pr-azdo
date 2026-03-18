@@ -6,7 +6,7 @@ import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
-import { FileChangeItem, FolderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
+import { FileChangeItem, FolderItem, ActivePrRootItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
@@ -306,6 +306,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			getChildren(element?: ActivePrTreeItem) {
 				return activePrProvider?.getChildren(element) ?? Promise.resolve([]);
 			},
+			getParent() {
+				return undefined;
+			},
 		},
 		showCollapseAll: true,
 		manageCheckboxStateManually: true,
@@ -350,6 +353,19 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
 			activePrProvider?.refresh();
 			gitContentProvider.clearCache();
+		}),
+	);
+
+	// Expand all items in the active PR tree
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.expandAll', async () => {
+			if (!activePrProvider || !activePrTreeView) { return; }
+			const roots = await activePrProvider.getChildren();
+			for (const root of roots) {
+				if (root instanceof ActivePrRootItem) {
+					await activePrTreeView.reveal(root, { expand: 3, select: false, focus: false });
+				}
+			}
 		}),
 	);
 

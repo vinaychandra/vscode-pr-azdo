@@ -110,6 +110,10 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
+### Unreleased
+
+- **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click (complements the built-in collapse-all)
+
 ### 0.0.2
 
 - **Review mode toggle in tree view** — "Enable Review" / "Disable Review" button at the top of the Active PR view with thread count, replacing the hidden eye icon as the primary toggle

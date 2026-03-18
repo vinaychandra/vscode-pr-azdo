@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+- **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click
+
 ## [0.0.2]
 
 ### Added
