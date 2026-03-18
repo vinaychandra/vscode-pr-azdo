@@ -6,7 +6,7 @@ import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
-import { FileChangeItem, FolderItem, ActivePrRootItem, type ActivePrTreeItem } from './views/activePrTreeItems';
+import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
@@ -306,8 +306,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			getChildren(element?: ActivePrTreeItem) {
 				return activePrProvider?.getChildren(element) ?? Promise.resolve([]);
 			},
-			getParent() {
-				return undefined;
+			getParent(element: ActivePrTreeItem) {
+				return activePrProvider?.getParent(element);
 			},
 		},
 		showCollapseAll: true,
@@ -360,12 +360,22 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.expandAll', async () => {
 			if (!activePrProvider || !activePrTreeView) { return; }
-			const roots = await activePrProvider.getChildren();
-			for (const root of roots) {
-				if (root instanceof ActivePrRootItem) {
-					await activePrTreeView.reveal(root, { expand: 10, select: false, focus: false });
+
+			async function expandRecursive(items: ActivePrTreeItem[]): Promise<void> {
+				for (const item of items) {
+					const isExpandable = item instanceof ActivePrRootItem
+						|| item instanceof SectionHeaderItem
+						|| item instanceof FolderItem;
+					if (isExpandable) {
+						await activePrTreeView!.reveal(item, { expand: true, select: false, focus: false });
+						const children = await activePrProvider!.getChildren(item);
+						await expandRecursive(children);
+					}
 				}
 			}
+
+			const roots = await activePrProvider.getChildren();
+			await expandRecursive(roots);
 		}),
 	);
 

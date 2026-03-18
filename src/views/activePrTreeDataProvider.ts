@@ -43,6 +43,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _authorFilter: string | null = null;
     private _reviewMode = false;
     private _reviewedFiles = new Set<string>();
+    private _parentMap = new Map<ActivePrTreeItem, ActivePrTreeItem | undefined>();
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
@@ -293,11 +294,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     /**
-     * Required by {@link vscode.TreeView.reveal}. Always returns `undefined`
-     * because we only reveal root-level items which have no parent.
+     * Required by {@link vscode.TreeView.reveal} to walk up to the root.
+     * Returns the parent element recorded during {@link getChildren}.
      */
-    getParent(): undefined {
-        return undefined;
+    getParent(element: ActivePrTreeItem): ActivePrTreeItem | undefined {
+        return this._parentMap.get(element);
     }
 
     async getChildren(element?: ActivePrTreeItem): Promise<ActivePrTreeItem[]> {
@@ -305,21 +306,28 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             return [];
         }
 
+        const trackChildren = (parent: ActivePrTreeItem | undefined, children: ActivePrTreeItem[]): ActivePrTreeItem[] => {
+            for (const child of children) {
+                this._parentMap.set(child, parent);
+            }
+            return children;
+        };
+
         // Root level → review toggle + PR root item
         if (!element) {
-            return [
+            return trackChildren(undefined, [
                 new ReviewModeToggleItem(this._reviewMode, this._allThreads?.length ?? 0),
                 new ActivePrRootItem(this._activePr),
-            ];
+            ]);
         }
 
         // PR root → Files + Commits sections
         if (element instanceof ActivePrRootItem) {
             const [fileCount, commitCount] = await this.ensureData();
-            return [
+            return trackChildren(element, [
                 new SectionHeaderItem('files', 'Files', fileCount),
                 new SectionHeaderItem('commits', 'Commits', commitCount),
-            ];
+            ]);
         }
 
         // Files section → filtered PR-level comments + folder tree
@@ -331,24 +339,24 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 items.push(...prComments);
             }
             items.push(...(this._fileTree ?? []));
-            return items;
+            return trackChildren(element, items);
         }
 
         // Commits section → commit items
         if (element instanceof SectionHeaderItem && element.section === 'commits') {
             await this.ensureData();
-            return (this._commits ?? []).map(c => new CommitItem(c));
+            return trackChildren(element, (this._commits ?? []).map(c => new CommitItem(c)));
         }
 
         // Folder → children
         if (element instanceof FolderItem) {
-            return element.children;
+            return trackChildren(element, element.children);
         }
 
         // File → comment threads (if review mode is on)
         if (element instanceof FileChangeItem) {
             if (this._reviewMode) {
-                return this.getFilteredFileComments(element);
+                return trackChildren(element, this.getFilteredFileComments(element));
             }
             return [];
         }

@@ -6,6 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.5]
+
+### Fixed
+
+- **Expand All now fully recursive** — the expand-all button properly expands every nested folder in the tree, not just the top levels
+- **getParent support** — tree data provider now tracks parent–child relationships, enabling reliable `reveal()` at any depth
+
 ## [0.0.4]
 
 ### Fixed

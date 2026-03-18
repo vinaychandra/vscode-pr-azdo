@@ -110,6 +110,10 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
+### 0.0.5
+
+- **Expand All fix** — the expand-all button now recursively expands every nested folder, not just the top levels
+
 ### 0.0.4
 
 - **Editable AI draft comments** — AI review drafts appear in an editable textarea; edit and click the checkmark to post your revised comment
