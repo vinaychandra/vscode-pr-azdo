@@ -3,7 +3,7 @@
   "publisher": "vinaydommeti",
   "displayName": "Azure DevOps - Code Reviews",
   "description": "Azure DevOps - Code Review Experience",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "author": {
     "name": "Vinay Dommeti"
   },
@@ -181,6 +181,11 @@
         "icon": "$(cloud-upload)"
       },
       {
+        "command": "vscode-pr-azdo.postDraftFromEdit",
+        "title": "Post Comment",
+        "icon": "$(check)"
+      },
+      {
         "command": "vscode-pr-azdo.dismissDraft",
         "title": "Dismiss Draft",
         "icon": "$(close)"
@@ -310,11 +315,6 @@
           "group": "navigation"
         },
         {
-          "command": "vscode-pr-azdo.postDraft",
-          "when": "commentThread =~ /azdoPrDraft/",
-          "group": "navigation"
-        },
-        {
           "command": "vscode-pr-azdo.dismissDraft",
           "when": "commentThread =~ /azdoPrDraft/",
           "group": "navigation"
@@ -355,6 +355,11 @@
         }
       ],
       "comments/comment/context": [
+        {
+          "command": "vscode-pr-azdo.postDraftFromEdit",
+          "when": "commentThread =~ /azdoPrDraft/",
+          "group": "inline"
+        },
         {
           "command": "vscode-pr-azdo.deleteComment",
           "when": "commentThread =~ /azdoPrThread/ && comment == ownComment",

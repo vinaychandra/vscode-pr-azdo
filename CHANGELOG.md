@@ -6,6 +6,18 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.4]
+
+### Fixed
+
+- **Editable AI draft comments** — AI review drafts now appear in an editable textarea; edit the text and click the checkmark to post your revised comment to Azure DevOps
+- **Draft submit posts edited text** — submitting from the reply box on a draft thread now sends the user's text instead of the original AI text
+
+### Changed
+
+- **Review prompt improvements** — AI review comments no longer praise or affirm code (e.g. "Good tests, but…"); comments are direct and to the point
+- **Removed "Post Draft" title button** — replaced by the inline "Post Comment" checkmark in the editing area
+
 ## [0.0.3]
 
 - **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click

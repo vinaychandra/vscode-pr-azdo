@@ -110,6 +110,13 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
+### 0.0.4
+
+- **Editable AI draft comments** — AI review drafts appear in an editable textarea; edit and click the checkmark to post your revised comment
+- **Draft submit fix** — submitting from the reply box on a draft now sends your text, not the original AI text
+- **No-praise review prompt** — AI comments no longer start with affirmations like "Good tests, but…"
+- **Simplified draft UX** — removed redundant "Post Draft" title button; inline "Post Comment" checkmark is the primary action
+
 ### 0.0.3
 
 - **Expand All** — new button in the Active PR view title bar to expand the entire tree in one click (complements the built-in collapse-all)

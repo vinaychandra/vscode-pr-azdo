@@ -306,9 +306,14 @@ export class PrCommentController implements vscode.Disposable {
         return this._threadMetaMap.get(thread)?.id;
     }
 
-    /** Find the parent thread that contains a given comment. */
+    /** Find the parent thread that contains a given comment (searches both real and draft threads). */
     findThreadForComment(comment: vscode.Comment): vscode.CommentThread | undefined {
         for (const thread of this._threads) {
+            if (Array.from(thread.comments).includes(comment)) {
+                return thread;
+            }
+        }
+        for (const thread of this._draftThreads) {
             if (Array.from(thread.comments).includes(comment)) {
                 return thread;
             }
