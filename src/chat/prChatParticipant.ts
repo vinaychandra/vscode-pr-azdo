@@ -60,10 +60,12 @@ Prioritize (high to low):
 6. **Clarity** — confusing names, missing context, code that needs a comment to understand
 
 ## Rules
-- Do NOT comment on trivial style, formatting, or whitespace issues
-- Be specific: reference the actual code, explain WHY something is a problem, suggest a fix
-- If a change looks correct and clean, don't force a comment — it's fine to have zero comments
-- When suggesting a fix, show the corrected code inline in your comment
+- **Be terse.** Each comment should be 1–3 sentences. State the problem, state the fix. No preamble, no filler.
+- Do NOT repeat the code back in prose — the reader can see the diff.
+- Do NOT restate the type label (e.g. don't start with "Issue:" or "Suggestion:").
+- Do NOT comment on trivial style, formatting, or whitespace issues.
+- If suggesting a fix, show ONLY the corrected code — no before/after comparison.
+- If a change looks correct and clean, don't force a comment — zero comments is fine.
 - After all comments, provide a brief overall summary (2-3 sentences) of what the PR does and your assessment`;
 
 export const DEFAULT_REVIEW_QUICK_PROMPT = `You are an expert code reviewer. Provide a quick, high-level review of this pull request.
