@@ -2,9 +2,9 @@ import * as vscode from 'vscode';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
 import type { AzDoApiClient } from '../azdo/apiClient';
-import { CategoryTreeItem, PullRequestTreeItem, type PrCategory } from './prTreeItems';
+import { CategoryTreeItem, PullRequestTreeItem, VoteFilterItem, groupPrsByVote, type PrCategory } from './prTreeItems';
 
-export type PrTreeItem = CategoryTreeItem | PullRequestTreeItem;
+export type PrTreeItem = CategoryTreeItem | PullRequestTreeItem | VoteFilterItem;
 
 /**
  * Provides data for the Pull Requests tree view.
@@ -20,6 +20,7 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
 
     // Cache fetched PR lists so collapsing/expanding doesn't re-fetch
     private _cache = new Map<PrCategory, GitPullRequest[]>();
+    private _cachedUserId: string | undefined;
 
     constructor(
         private readonly prService: PullRequestService,
@@ -30,6 +31,7 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
     /** Force a full refresh of all data. */
     refresh(): void {
         this._cache.clear();
+        this._cachedUserId = undefined;
         this._onDidChangeTreeData.fire();
     }
 
@@ -46,6 +48,10 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
             return this.getPullRequestsForCategory(element);
         }
 
+        if (element instanceof VoteFilterItem) {
+            return element.prs.map(pr => new PullRequestTreeItem(pr));
+        }
+
         return [];
     }
 
@@ -57,11 +63,13 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
         ];
     }
 
-    private async getPullRequestsForCategory(category: CategoryTreeItem): Promise<PullRequestTreeItem[]> {
+    private async getPullRequestsForCategory(category: CategoryTreeItem): Promise<PrTreeItem[]> {
         try {
             const cached = this._cache.get(category.category);
-            if (cached) {
-                return cached.map(pr => new PullRequestTreeItem(pr));
+            if (cached) {                // For waitingForReview, return vote sub-groups instead of flat PR list
+                if (category.category === 'waitingForReview' && this._cachedUserId) {
+                    return groupPrsByVote(cached, this._cachedUserId);
+                } return cached.map(pr => new PullRequestTreeItem(pr));
             }
 
             this.log.appendLine(`[tree] Fetching PRs for category: ${category.category}`);
@@ -79,7 +87,11 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
                 case 'waitingForReview': {
                     const userId = await this.apiClient.getCurrentUserId();
                     prs = await this.prService.getPullRequestsAwaitingMyReview(userId);
-                    break;
+                    this._cache.set(category.category, prs);
+                    this._cachedUserId = userId;
+                    this.log.appendLine(`[tree] ${category.category}: ${prs.length} PR(s)`);
+                    this._onDidChangeTreeData.fire();
+                    return groupPrsByVote(prs, userId);
                 }
             }
 

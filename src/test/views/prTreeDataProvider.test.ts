@@ -4,7 +4,7 @@ import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfa
 import type { PullRequestService } from '../../azdo/prService';
 import type { AzDoApiClient } from '../../azdo/apiClient';
 import { PrTreeDataProvider } from '../../views/prTreeDataProvider';
-import { CategoryTreeItem, PullRequestTreeItem } from '../../views/prTreeItems';
+import { CategoryTreeItem, PullRequestTreeItem, VoteFilterItem } from '../../views/prTreeItems';
 
 function makePr(id: number, title: string, isDraft = false): GitPullRequest {
     return {
@@ -94,16 +94,22 @@ suite('PrTreeDataProvider', () => {
         provider.dispose();
     });
 
-    test('expanding "waitingForReview" returns PR items', async () => {
+    test('expanding "waitingForReview" returns vote filter groups', async () => {
+        const prWithVote = {
+            ...pr1,
+            reviewers: [{ id: 'user-123', vote: 0 }],
+        };
         const provider = new PrTreeDataProvider(
-            createMockPrService([], [], [pr1]),
+            createMockPrService([], [], [prWithVote]),
             createMockApiClient(),
             createMockLog(),
         );
         const category = new CategoryTreeItem('waitingForReview', 'Waiting for My Review', undefined);
         const children = await provider.getChildren(category);
         assert.strictEqual(children.length, 1);
-        assert.strictEqual((children[0] as PullRequestTreeItem).pr.pullRequestId, 1);
+        assert.ok(children[0] instanceof VoteFilterItem);
+        assert.strictEqual((children[0] as VoteFilterItem).vote, 0);
+        assert.strictEqual((children[0] as VoteFilterItem).prs.length, 1);
         provider.dispose();
     });
 

@@ -8,7 +8,7 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
-- **Waiting for My Review** — see PRs assigned to you for review
+- **Waiting for My Review** — see PRs assigned to you for review, grouped by your vote status (No vote yet, Approved, Waiting for author, etc.)
 - **Checkout** — one-click checkout of a PR's source branch with progress notification
 - **Author display** — PR author's first name shown alongside the PR number
 - **Delete Branch** — remove the local branch after review from the Active PR sidebar
@@ -115,6 +115,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 - **Context-aware review mode** — "Review with Copilot" and "Standalone Review" detect git state and offer scope options (staged, unstaged, uncommitted, unpushed, or vs target)
 - **Inline reply drafts** — AI-suggested replies are prefilled as editable inline comments instead of a small input box
+- **Vote-based grouping** — "Waiting for My Review" groups PRs by your vote status (No vote, Approved, Waiting for author, Rejected)
 
 ### 0.0.5
 

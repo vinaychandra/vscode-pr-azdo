@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { CategoryTreeItem, PullRequestTreeItem } from '../../views/prTreeItems';
+import { CategoryTreeItem, PullRequestTreeItem, VoteFilterItem, groupPrsByVote } from '../../views/prTreeItems';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 suite('CategoryTreeItem', () => {
@@ -127,5 +127,99 @@ suite('PullRequestTreeItem', () => {
         assert.ok(item.tooltip instanceof vscode.MarkdownString);
         const md = (item.tooltip as vscode.MarkdownString).value;
         assert.ok(!md.includes('refs/heads/'));
+    });
+});
+
+suite('VoteFilterItem', () => {
+    function makePr(id: number): GitPullRequest {
+        return { pullRequestId: id, title: `PR ${id}` } as any;
+    }
+
+    test('sets label and count', () => {
+        const item = new VoteFilterItem(0, [makePr(1), makePr(2)]);
+        assert.strictEqual(item.label, 'No vote yet');
+        assert.strictEqual(item.description, '2');
+    });
+
+    test('is collapsible', () => {
+        const item = new VoteFilterItem(10, [makePr(1)]);
+        assert.strictEqual(item.collapsibleState, vscode.TreeItemCollapsibleState.Collapsed);
+    });
+
+    test('stores PRs', () => {
+        const prs = [makePr(1), makePr(2)];
+        const item = new VoteFilterItem(-5, prs);
+        assert.strictEqual(item.prs, prs);
+    });
+
+    test('contextValue is voteFilter', () => {
+        const item = new VoteFilterItem(0, []);
+        assert.strictEqual(item.contextValue, 'voteFilter');
+    });
+
+    test('uses check icon for approved', () => {
+        const item = new VoteFilterItem(10, [makePr(1)]);
+        assert.ok(item.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((item.iconPath as vscode.ThemeIcon).id, 'check');
+    });
+});
+
+suite('groupPrsByVote', () => {
+    function makePr(id: number, vote: number, reviewerId = 'user-1'): GitPullRequest {
+        return {
+            pullRequestId: id,
+            title: `PR ${id}`,
+            reviewers: [{ id: reviewerId, vote }],
+        } as any;
+    }
+
+    test('groups PRs by vote with correct order', () => {
+        const prs = [
+            makePr(1, 0),
+            makePr(2, 10),
+            makePr(3, -5),
+            makePr(4, 0),
+        ];
+        const groups = groupPrsByVote(prs, 'user-1');
+        const votes = groups.map(g => g.vote);
+        // Order: 0, -5, 10 (only groups with PRs)
+        assert.deepStrictEqual(votes, [0, -5, 10]);
+        assert.strictEqual(groups[0].prs.length, 2); // No vote: PR 1, 4
+        assert.strictEqual(groups[1].prs.length, 1); // Waiting: PR 3
+        assert.strictEqual(groups[2].prs.length, 1); // Approved: PR 2
+    });
+
+    test('omits empty groups', () => {
+        const prs = [makePr(1, 10), makePr(2, 10)];
+        const groups = groupPrsByVote(prs, 'user-1');
+        assert.strictEqual(groups.length, 1);
+        assert.strictEqual(groups[0].vote, 10);
+        assert.strictEqual(groups[0].prs.length, 2);
+    });
+
+    test('handles PRs with no reviewers as no-vote', () => {
+        const pr = { pullRequestId: 1, title: 'PR 1', reviewers: [] } as any;
+        const groups = groupPrsByVote([pr], 'user-1');
+        assert.strictEqual(groups.length, 1);
+        assert.strictEqual(groups[0].vote, 0);
+    });
+
+    test('matches reviewer by id', () => {
+        const prs = [makePr(1, 10, 'user-1'), makePr(2, -10, 'user-1')];
+        const groups = groupPrsByVote(prs, 'user-1');
+        const votes = groups.map(g => g.vote);
+        assert.deepStrictEqual(votes, [10, -10]);
+    });
+
+    test('treats unknown vote values as no-vote', () => {
+        const prs = [makePr(1, 99)];
+        const groups = groupPrsByVote(prs, 'user-1');
+        assert.strictEqual(groups.length, 1);
+        assert.strictEqual(groups[0].vote, 0);
+    });
+
+    test('empty PR list returns empty groups', () => {
+        const groups = groupPrsByVote([], 'user-1');
+        assert.strictEqual(groups.length, 0);
     });
 });
