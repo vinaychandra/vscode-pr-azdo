@@ -8,6 +8,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Copilot instruction file support** — all AI prompts (`/fix`, `/review`, `/review-quick`, `/review-branch`, and PR description generation) now instruct the LM to search for and read user instruction files before responding: `.github/copilot-instructions.md` (repo-level), `**/.instructions.md` (directory-scoped), and `.copilot/` directory contents
 - **Context-aware review mode selection** — "Review with Copilot" and "Standalone Review" now detect your git working tree state and offer appropriate review scopes:
   - **Clean + pushed** — auto-proceeds with diff against the remote target branch (previous behavior)
   - **Clean + unpushed commits** — choose between reviewing only unpushed commits or all changes vs the remote target

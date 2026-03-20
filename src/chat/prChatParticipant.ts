@@ -51,6 +51,13 @@ type: <suggestion|issue|nitpick|question>
 Your review comment here.
 [/REVIEW_COMMENT]
 
+## User Instructions
+BEFORE starting your review, search the workspace for instruction files and read any that exist:
+- \`.github/copilot-instructions.md\` — repo-level instructions
+- \`**/.instructions.md\` — directory-scoped instructions (may appear at any level)
+- \`.copilot/\` directory — may contain additional instruction or prompt files
+Follow any instructions found as general coding and review guidelines.
+
 ## Review Focus
 Prioritize (high to low):
 1. **Bugs and logic errors** — incorrect behavior, off-by-one, race conditions
@@ -71,6 +78,12 @@ Prioritize (high to low):
 - After all comments, provide a brief overall summary (2-3 sentences) of what the PR does and your assessment.`;
 
 export const DEFAULT_REVIEW_QUICK_PROMPT = `You are an expert code reviewer. Provide a quick, high-level review of this pull request.
+
+BEFORE starting your review, search the workspace for instruction files and read any that exist:
+- \`.github/copilot-instructions.md\` — repo-level instructions
+- \`**/.instructions.md\` — directory-scoped instructions (may appear at any level)
+- \`.copilot/\` directory — may contain additional instruction or prompt files
+Follow any instructions found as general coding and review guidelines.
 
 Focus on:
 - What the PR does (brief summary)
@@ -95,6 +108,13 @@ You have access to the full workspace via tools. USE THEM:
 - Search for symbols, types, or functions referenced in the comment or code
 - Look up related files to understand the broader context
 Do NOT guess about code structure or behavior — look it up first.
+
+## User Instructions
+BEFORE responding, search the workspace for instruction files and read any that exist:
+- \`.github/copilot-instructions.md\` — repo-level instructions
+- \`**/.instructions.md\` — directory-scoped instructions (may appear at any level)
+- \`.copilot/\` directory — may contain additional instruction or prompt files
+Follow any instructions found as general coding guidelines.
 
 **IMPORTANT: Do NOT edit or modify any files directly.** Your role is to SUGGEST changes.
 Provide all code fixes as fenced code blocks in your response. The user will review and apply them.

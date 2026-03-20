@@ -1463,6 +1463,7 @@ export async function activate(context: vscode.ExtensionContext) {
 									'- Include a brief summary section and a list of key changes',
 									'- Be specific and technical, not generic',
 									'- Do NOT include a heading (the title IS the heading)',
+									'- Search the workspace for instruction files (`.github/copilot-instructions.md`, `**/.instructions.md`, `.copilot/` directory) and follow any found as general coding guidelines',
 									'',
 									'Output format (EXACTLY):',
 									'TITLE: <your title here>',
