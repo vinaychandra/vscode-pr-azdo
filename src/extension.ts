@@ -15,6 +15,7 @@ import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azu
 import { PrContextProvider } from './chat/prContextProvider';
 import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
+import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 
@@ -669,9 +670,44 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- AI: Review PR from sidebar button ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
-			outputChannel.appendLine('[ai] Opening Copilot Chat for PR review');
+			outputChannel.appendLine('[ai] reviewWithAI: detecting git state…');
+			const repo = gitApi?.repositories[0];
+			if (!repo) {
+				outputChannel.appendLine('[ai] reviewWithAI: no git repo found');
+				await vscode.commands.executeCommand('workbench.action.chat.open', {
+					query: '@azdo-pr /review',
+				});
+				return;
+			}
+
+			// Determine target branch from active PR
+			const pr = prContextProvider.activePr;
+			const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+
+			const state = await detectGitState(repo, outputChannel);
+			const options = getReviewOptions(state, targetBranch, outputChannel);
+
+			if (!options) {
+				// Scenario 1: clean + pushed → auto-proceed
+				outputChannel.appendLine('[ai] reviewWithAI: clean+pushed → opening review with vs-target');
+				await vscode.commands.executeCommand('workbench.action.chat.open', {
+					query: '@azdo-pr /review --mode=vs-target',
+				});
+				return;
+			}
+
+			const picked = await vscode.window.showQuickPick<ReviewQuickPickItem>(options, {
+				placeHolder: 'What do you want to review?',
+				title: 'Review with Copilot',
+			});
+			if (!picked) {
+				outputChannel.appendLine('[ai] reviewWithAI: user cancelled QuickPick');
+				return;
+			}
+
+			outputChannel.appendLine(`[ai] reviewWithAI: user selected mode=${picked.reviewMode}`);
 			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: '@azdo-pr /review',
+				query: `@azdo-pr /review --mode=${picked.reviewMode}`,
 			});
 		}),
 	);
@@ -1401,10 +1437,32 @@ export async function activate(context: vscode.ExtensionContext) {
 			});
 			if (!targetBranch) { return; }
 
-			// Open Copilot Chat with @azdo-pr /review-branch <branch>
-			outputChannel.appendLine(`[ext] Opening chat for standalone review against ${targetBranch}`);
+			// Detect git state and let user choose review mode
+			outputChannel.appendLine(`[ext] standaloneReview: detecting git state…`);
+			const state = await detectGitState(repo, outputChannel);
+			const options = getReviewOptions(state, targetBranch, outputChannel);
+
+			if (!options) {
+				// Scenario 1: clean + pushed → auto-proceed
+				outputChannel.appendLine(`[ext] standaloneReview: clean+pushed → opening review-branch with vs-target`);
+				await vscode.commands.executeCommand('workbench.action.chat.open', {
+					query: `@azdo-pr /review-branch ${targetBranch} --mode=vs-target`,
+				});
+				return;
+			}
+
+			const picked = await vscode.window.showQuickPick<ReviewQuickPickItem>(options, {
+				placeHolder: 'What do you want to review?',
+				title: 'Standalone Review with Copilot',
+			});
+			if (!picked) {
+				outputChannel.appendLine('[ext] standaloneReview: user cancelled QuickPick');
+				return;
+			}
+
+			outputChannel.appendLine(`[ext] standaloneReview: user selected mode=${picked.reviewMode}`);
 			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: `@azdo-pr /review-branch ${targetBranch}`,
+				query: `@azdo-pr /review-branch ${targetBranch} --mode=${picked.reviewMode}`,
 			});
 		}),
 	);

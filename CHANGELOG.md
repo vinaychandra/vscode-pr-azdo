@@ -6,6 +6,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **Context-aware review mode selection** — "Review with Copilot" and "Standalone Review" now detect your git working tree state and offer appropriate review scopes:
+  - **Clean + pushed** — auto-proceeds with diff against the remote target branch (previous behavior)
+  - **Clean + unpushed commits** — choose between reviewing only unpushed commits or all changes vs the remote target
+  - **Dirty working tree** — choose from staged changes only, unstaged changes only, all uncommitted changes vs last commit, committed but non-pushed changes, or everything vs the remote target
+- **Review mode passed to AI** — the chat participant now shows what scope of changes it is reviewing in progress messages and context sent to the language model
+
 ## [0.0.5]
 
 ### Fixed

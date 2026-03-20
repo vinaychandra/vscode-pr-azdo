@@ -5,6 +5,7 @@ import type { PrCommentController } from '../views/prCommentController';
 import { hasSuggestion, extractSuggestion } from '../views/suggestionRenderer';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { API } from '../typings/git';
+import { type ReviewMode, buildGitDiffArgs, reviewModeLabel } from '../git/gitStateDetector';
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
 
@@ -420,6 +421,22 @@ export function registerPrChatParticipant(
 export const REVIEW_COMMENT_RE = /\[REVIEW_COMMENT\]\s*\nfile:\s*(.+)\nline:\s*(\d+)\ntype:\s*(\w+)\n---\n([\s\S]*?)\[\/REVIEW_COMMENT\]/g;
 
 /**
+ * Parse `--mode=<mode>` from the prompt string and return {mode, cleanPrompt}.
+ * If no --mode flag is found, returns mode `undefined` and the original prompt.
+ */
+function parseReviewMode(prompt: string): { mode: ReviewMode | undefined; cleanPrompt: string } {
+    const modeMatch = prompt.match(/--mode=(\S+)/);
+    if (!modeMatch) {
+        return { mode: undefined, cleanPrompt: prompt };
+    }
+    const rawMode = modeMatch[1];
+    const valid: ReviewMode[] = ['staged', 'unstaged', 'all-uncommitted', 'unpushed-commits', 'vs-target'];
+    const mode = valid.includes(rawMode as ReviewMode) ? (rawMode as ReviewMode) : undefined;
+    const cleanPrompt = prompt.replace(/--mode=\S+/, '').trim();
+    return { mode, cleanPrompt };
+}
+
+/**
  * Handle /review-branch command.
  * Reviews local changes against a chosen branch — works without an active PR.
  * The target branch is passed via `request.prompt`.
@@ -441,29 +458,33 @@ async function handleReviewBranch(
     const currentBranch = repo.state.HEAD?.name ?? '(detached)';
     const cwd = repo.rootUri.fsPath;
 
-    // The target branch is passed as the prompt text (set by the standaloneReview command)
-    const targetBranch = request.prompt.trim() || 'main';
+    // Parse --mode=<mode> from the prompt, remainder is the target branch
+    const { mode, cleanPrompt } = parseReviewMode(request.prompt);
+    const reviewMode: ReviewMode = mode ?? 'vs-target';
+    const targetBranch = cleanPrompt.trim() || 'main';
     const targetRef = `origin/${targetBranch}`;
+    const currentBranchRef = currentBranch !== '(detached)' ? `origin/${currentBranch}` : undefined;
 
-    stream.progress(`Computing diff: ${currentBranch} vs ${targetBranch}…`);
-    log.appendLine(`[chat/review-branch] Reviewing ${currentBranch} against ${targetRef}`);
+    const modeDesc = reviewModeLabel(reviewMode, targetBranch);
+    stream.progress(`Computing diff (${modeDesc})…`);
+    log.appendLine(`[chat/review-branch] mode=${reviewMode} branch=${currentBranch} target=${targetRef}`);
 
     let diffOutput: string;
     try {
-        diffOutput = await runGitDiff(cwd, targetRef, []);
+        diffOutput = await runGitDiff(cwd, targetRef, [], reviewMode, currentBranchRef);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.appendLine(`[chat/review-branch] git diff failed: ${msg}`);
-        stream.markdown(`⚠️ Failed to compute diff against \`${targetRef}\`.\n\nMake sure the branch is fetched locally (\`git fetch origin ${targetBranch}\`).\n\n\`\`\`\n${msg}\n\`\`\``);
+        stream.markdown(`⚠️ Failed to compute diff (${modeDesc}).\n\nMake sure the branch is fetched locally (\`git fetch origin ${targetBranch}\`).\n\n\`\`\`\n${msg}\n\`\`\``);
         return { metadata: {} };
     }
 
     if (!diffOutput.trim()) {
-        stream.markdown(`No differences found between **${currentBranch}** and **${targetBranch}**. The working copy matches the target.`);
+        stream.markdown(`No differences found for **${modeDesc}**. The working copy matches the target.`);
         return { metadata: {} };
     }
 
-    stream.markdown(`Reviewing **${currentBranch}** against **${targetBranch}**…\n\n`);
+    stream.markdown(`Reviewing **${currentBranch}** — ${modeDesc}…\n\n`);
 
     const systemPrompt = getPrompt('review', DEFAULT_REVIEW_PROMPT);
     const messages: vscode.LanguageModelChatMessage[] = [
@@ -478,11 +499,12 @@ async function handleReviewBranch(
 
     messages.push(vscode.LanguageModelChatMessage.User(
         `## Code Review Request\n\n` +
-        `**Branch:** ${currentBranch} (compared against ${targetBranch})\n\n` +
+        `**Branch:** ${currentBranch}\n` +
+        `**Review scope:** ${modeDesc}\n\n` +
         `## Diff\n\n\`\`\`diff\n${diffOutput}\n\`\`\``,
     ));
 
-    stream.progress('Reviewing changes…');
+    stream.progress(`Reviewing ${modeDesc}…`);
 
     try {
         const tools = getChatTools();
@@ -607,26 +629,37 @@ async function handleReview(
         return { metadata: {} };
     }
 
+    // Parse --mode=<mode> from the prompt
+    const { mode, cleanPrompt: extraInstructions } = parseReviewMode(request.prompt);
+    const reviewMode: ReviewMode = mode ?? 'vs-target';
+
     // Get the diff against the target branch
     const pr = contextProvider.activePr;
     const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
     const targetRef = `origin/${targetBranch}`;
     const cwd = workspaceRoot.fsPath;
+    const currentBranch = gitApi?.repositories[0]?.state.HEAD?.name;
+    const currentBranchRef = currentBranch ? `origin/${currentBranch}` : undefined;
 
-    stream.progress(`Computing diff against ${targetBranch}…`);
+    // For non-target modes, don't scope to PR files (review all dirty/uncommitted files)
+    const diffFilePaths = reviewMode === 'vs-target' ? filePaths : [];
+    const modeDesc = reviewModeLabel(reviewMode, targetBranch);
+
+    stream.progress(`Computing diff (${modeDesc})…`);
+    log.appendLine(`[chat/review] mode=${reviewMode} target=${targetRef} files=${diffFilePaths.length}`);
 
     let diffOutput: string;
     try {
-        diffOutput = await runGitDiff(cwd, targetRef, filePaths);
+        diffOutput = await runGitDiff(cwd, targetRef, diffFilePaths, reviewMode, currentBranchRef);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.appendLine(`[chat/review] git diff failed: ${msg}`);
-        stream.markdown(`⚠️ Failed to compute diff: ${msg}\n\nMake sure \`${targetRef}\` is fetched locally.`);
+        stream.markdown(`⚠️ Failed to compute diff (${modeDesc}): ${msg}\n\nMake sure \`${targetRef}\` is fetched locally.`);
         return { metadata: {} };
     }
 
     if (!diffOutput.trim()) {
-        stream.markdown('No differences found against the target branch. The working copy matches the target.');
+        stream.markdown(`No differences found for **${modeDesc}**.`);
         return { metadata: {} };
     }
 
@@ -646,13 +679,13 @@ async function handleReview(
         ));
     }
 
-    messages.push(vscode.LanguageModelChatMessage.User(`${prText}\n\n## Diff (against ${targetBranch})\n\n\`\`\`diff\n${diffOutput}\n\`\`\``));
-    if (request.prompt) {
-        messages.push(vscode.LanguageModelChatMessage.User(`Additional instructions from the reviewer: ${request.prompt}`));
+    messages.push(vscode.LanguageModelChatMessage.User(`${prText}\n\n## Diff — ${modeDesc}\n\n\`\`\`diff\n${diffOutput}\n\`\`\``));
+    if (extraInstructions) {
+        messages.push(vscode.LanguageModelChatMessage.User(`Additional instructions from the reviewer: ${extraInstructions}`));
     }
 
-    stream.progress(isQuick ? 'Summarizing changes…' : 'Reviewing changes…');
-    log.appendLine(`[chat] /review${isQuick ? '-quick' : ''}: ${filePaths.length} files`);
+    stream.progress(isQuick ? 'Summarizing changes…' : `Reviewing ${modeDesc}…`);
+    log.appendLine(`[chat] /review${isQuick ? '-quick' : ''}: mode=${reviewMode} ${diffFilePaths.length || 'all'} files`);
 
     try {
         // Only expose tools that work without toolInvocationToken
@@ -755,13 +788,26 @@ async function handleReview(
 }
 
 /**
- * Run `git diff` against a target ref for the specified files.
+ * Run `git diff` with arguments determined by the review mode.
+ * Falls back to the legacy `targetRef + filePaths` signature when no mode is given.
  */
-export function runGitDiff(cwd: string, targetRef: string, filePaths: string[]): Promise<string> {
+export function runGitDiff(
+    cwd: string,
+    targetRef: string,
+    filePaths: string[],
+    mode?: ReviewMode,
+    currentBranchRef?: string,
+): Promise<string> {
+    const args = mode
+        ? buildGitDiffArgs(mode, targetRef, currentBranchRef, filePaths)
+        : (filePaths.length > 0
+            ? ['diff', targetRef, '--', ...filePaths]
+            : ['diff', targetRef]);
+
     return new Promise((resolve, reject) => {
         execFile(
             'git',
-            ['diff', targetRef, '--', ...filePaths],
+            args,
             { cwd, maxBuffer: 10 * 1024 * 1024, encoding: 'utf-8' },
             (err, stdout) => {
                 if (err) {
