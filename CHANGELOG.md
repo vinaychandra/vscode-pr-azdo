@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.6]
+
 ### Added
 
 - **Copilot instruction file support** — all AI prompts (`/fix`, `/review`, `/review-quick`, `/review-branch`, and PR description generation) now instruct the LM to search for and read user instruction files before responding: `.github/copilot-instructions.md` (repo-level), `**/.instructions.md` (directory-scoped), and `.copilot/` directory contents
