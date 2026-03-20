@@ -9,7 +9,7 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
 - **Waiting for My Review** — see PRs assigned to you for review, grouped by your vote status (No vote yet, Approved, Waiting for author, etc.)
-- **Checkout** — one-click checkout of a PR's source branch with progress notification, or double-click a PR in the tree to checkout directly
+- **Checkout** — one-click checkout of a PR's source branch with progress notification, or double-click a PR in the tree to checkout directly; dirty working tree is detected upfront with Stash & Checkout option
 - **Author display** — PR author's first name shown alongside the PR number
 - **Delete Branch** — remove the local branch after review from the Active PR sidebar
 

@@ -17,6 +17,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **Vote-based grouping in Waiting for My Review** — PRs awaiting your review are now grouped by your vote status (No vote yet, Waiting for author, Approved with suggestions, Approved, Rejected) so you can quickly find PRs that still need attention
 - **Double-click to checkout** — double-click a PR in the Pull Requests tree to checkout its branch; single click still opens the detail webview
 - **Checkout from webview** — the PR detail panel now includes a “Checkout Branch” button alongside Approve, Reject, and Open in Browser
+- **Dirty checkout handling** — checking out a PR branch on a dirty working tree now shows a clear warning with options to Stash & Checkout, Try Anyway, or Cancel
 
 ## [0.0.5]
 

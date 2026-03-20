@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll } from './git/gitExtension';
+import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
@@ -1175,6 +1175,54 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('No git repository found.');
 				return;
 			}
+
+			// Check for dirty working tree before attempting checkout
+			const workingChanges = repo.state.workingTreeChanges?.length ?? 0;
+			const indexChanges = repo.state.indexChanges?.length ?? 0;
+			const isDirty = workingChanges > 0 || indexChanges > 0;
+			outputChannel.appendLine(`[checkout] branch=${branchName} dirty=${isDirty} (working=${workingChanges}, staged=${indexChanges})`);
+
+			if (isDirty) {
+				const choice = await vscode.window.showWarningMessage(
+					`You have ${workingChanges + indexChanges} uncommitted change(s). Checkout of \`${branchName}\` may fail.`,
+					'Stash & Checkout',
+					'Try Anyway',
+					'Cancel',
+				);
+				if (choice === 'Cancel' || !choice) { return; }
+				if (choice === 'Stash & Checkout') {
+					outputChannel.appendLine('[checkout] User chose Stash & Checkout');
+					try {
+						await vscode.window.withProgress(
+							{ location: vscode.ProgressLocation.Notification, title: `Stashing changes and checking out ${branchName}…` },
+							async () => {
+								await gitStash(repo.rootUri.fsPath, `Auto-stash before checkout of ${branchName}`);
+								await repo.fetch();
+								await repo.checkout(branchName);
+							},
+						);
+						outputChannel.appendLine(`[checkout] Stash + checkout succeeded for ${branchName}`);
+						vscode.window.showInformationMessage(
+							`Checked out \`${branchName}\`. Your changes were stashed — use \`git stash pop\` to restore them.`,
+						);
+						if (!reviewMode) {
+							reviewMode = true;
+							void context.workspaceState.update('reviewMode', true);
+							outputChannel.appendLine('[checkout] Enabled review mode for checked-out PR');
+							applyReviewMode();
+						}
+						return;
+					} catch (stashErr) {
+						const stashMsg = stashErr instanceof Error ? stashErr.message : String(stashErr);
+						outputChannel.appendLine(`[checkout] Stash + checkout failed: ${stashMsg}`);
+						vscode.window.showErrorMessage(`Failed to stash and checkout: ${stashMsg}`);
+						return;
+					}
+				}
+				// "Try Anyway" falls through to normal checkout below
+				outputChannel.appendLine('[checkout] User chose Try Anyway');
+			}
+
 			outputChannel.appendLine(`[checkout] Fetching and checking out branch: ${branchName}`);
 			try {
 				await vscode.window.withProgress(
@@ -1195,7 +1243,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				outputChannel.appendLine(`[checkout] Failed: ${msg}`);
-				vscode.window.showErrorMessage(`Failed to checkout branch: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to checkout \`${branchName}\`: ${msg}`);
 			}
 		}),
 	);

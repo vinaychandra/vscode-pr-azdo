@@ -98,3 +98,22 @@ export function gitCommitAll(repoRoot: string, message: string): Promise<void> {
         });
     });
 }
+
+/**
+ * Stash all changes with an optional message.
+ * Uses `git stash push -m` via child_process.
+ */
+export function gitStash(repoRoot: string, message?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const args = message
+            ? ['stash', 'push', '-m', message]
+            : ['stash', 'push'];
+        execFile('git', args, { cwd: repoRoot }, (err, _stdout, stderr) => {
+            if (err) {
+                reject(new Error(stderr.trim() || err.message));
+            } else {
+                resolve();
+            }
+        });
+    });
+}
