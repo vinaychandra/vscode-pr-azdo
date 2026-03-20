@@ -5,6 +5,7 @@ import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
+import { PullRequestTreeItem } from './views/prTreeItems';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
@@ -289,6 +290,35 @@ export async function activate(context: vscode.ExtensionContext) {
 		showCollapseAll: true,
 	});
 	context.subscriptions.push(treeView);
+
+	// Smart click handler: single click opens webview, double click checks out
+	let lastClickedPrId: number | undefined;
+	let lastClickTime = 0;
+	let singleClickTimer: ReturnType<typeof setTimeout> | undefined;
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.prItemClick', (pr: GitPullRequest) => {
+			const prId = pr.pullRequestId;
+			const now = Date.now();
+
+			if (prId === lastClickedPrId && (now - lastClickTime) < 400) {
+				// Double click — cancel pending single-click and checkout
+				if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = undefined; }
+				outputChannel.appendLine(`[ext] Double-click on PR #${prId} — checking out`);
+				void vscode.commands.executeCommand('vscode-pr-azdo.checkoutPullRequest', { pr });
+				lastClickedPrId = undefined;
+				lastClickTime = 0;
+			} else {
+				// First click — schedule single-click action
+				lastClickedPrId = prId;
+				lastClickTime = now;
+				if (singleClickTimer) { clearTimeout(singleClickTimer); }
+				singleClickTimer = setTimeout(() => {
+					singleClickTimer = undefined;
+					void vscode.commands.executeCommand('vscode-pr-azdo.openPullRequest', pr);
+				}, 400);
+			}
+		}),
+	);
 
 	// Refresh command
 	context.subscriptions.push(

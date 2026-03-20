@@ -9,7 +9,7 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
 - **Waiting for My Review** — see PRs assigned to you for review, grouped by your vote status (No vote yet, Approved, Waiting for author, etc.)
-- **Checkout** — one-click checkout of a PR's source branch with progress notification
+- **Checkout** — one-click checkout of a PR's source branch with progress notification, or double-click a PR in the tree to checkout directly
 - **Author display** — PR author's first name shown alongside the PR number
 - **Delete Branch** — remove the local branch after review from the Active PR sidebar
 
@@ -57,6 +57,7 @@ When code has changed since a comment was made, click the **$(git-compare)** but
 ### PR Detail Panel
 
 - Webview showing PR metadata: title, description, author, reviewers with vote status, labels, work items, merge status, and auto-complete info
+- **Checkout Branch** button to check out the PR’s source branch directly from the detail panel
 - Direct link to the PR on Azure DevOps
 
 ### AI Assistant (`@azdo-pr`)
@@ -116,6 +117,8 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 - **Context-aware review mode** — "Review with Copilot" and "Standalone Review" detect git state and offer scope options (staged, unstaged, uncommitted, unpushed, or vs target)
 - **Inline reply drafts** — AI-suggested replies are prefilled as editable inline comments instead of a small input box
 - **Vote-based grouping** — "Waiting for My Review" groups PRs by your vote status (No vote, Approved, Waiting for author, Rejected)
+- **Double-click to checkout** — double-click a PR in the tree to checkout its branch; single click opens the detail webview
+- **Checkout from webview** — PR detail panel includes a Checkout Branch button
 
 ### 0.0.5
 

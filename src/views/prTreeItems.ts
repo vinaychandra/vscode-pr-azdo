@@ -65,9 +65,10 @@ export class PullRequestTreeItem extends vscode.TreeItem {
         );
         this.contextValue = 'pullRequest';
 
-        // Clicking a PR opens the detail webview
+        // Clicking a PR routes through the smart-click handler
+        // which opens the detail webview on single click and checks out on double click
         this.command = {
-            command: 'vscode-pr-azdo.openPullRequest',
+            command: 'vscode-pr-azdo.prItemClick',
             title: 'Open Pull Request',
             arguments: [pr],
         };

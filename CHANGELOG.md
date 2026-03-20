@@ -15,6 +15,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **Review mode passed to AI** — the chat participant now shows what scope of changes it is reviewing in progress messages and context sent to the language model
 - **Inline reply drafts** — "Post Reply to Thread" now prefills the AI-suggested reply as an editable comment directly in the inline thread instead of a small input box; edit in place and submit or dismiss with the familiar checkmark/dismiss buttons
 - **Vote-based grouping in Waiting for My Review** — PRs awaiting your review are now grouped by your vote status (No vote yet, Waiting for author, Approved with suggestions, Approved, Rejected) so you can quickly find PRs that still need attention
+- **Double-click to checkout** — double-click a PR in the Pull Requests tree to checkout its branch; single click still opens the detail webview
+- **Checkout from webview** — the PR detail panel now includes a “Checkout Branch” button alongside Approve, Reject, and Open in Browser
 
 ## [0.0.5]
 

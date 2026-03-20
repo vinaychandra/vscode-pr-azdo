@@ -6,7 +6,7 @@ import type { AzDoRemoteInfo } from '../azdo/remoteInfo';
 
 /** Messages sent from webview → extension. */
 interface WebviewMessage {
-    command: 'approve' | 'reject' | 'waitingForAuthor' | 'openInBrowser' | 'copyLink';
+    command: 'approve' | 'reject' | 'waitingForAuthor' | 'openInBrowser' | 'copyLink' | 'checkout';
 }
 
 /**
@@ -82,6 +82,10 @@ export class PrDetailPanel {
                 vscode.window.showInformationMessage('PR link copied to clipboard.');
                 break;
             }
+            case 'checkout':
+                this.log.appendLine(`[detail] Checkout requested for PR #${this.pr.pullRequestId}`);
+                void vscode.commands.executeCommand('vscode-pr-azdo.checkoutPullRequest', { pr: this.pr });
+                break;
         }
     }
 
@@ -269,6 +273,7 @@ export function buildHtml(pr: GitPullRequest, remoteInfo: AzDoRemoteInfo): strin
     <button class="btn-danger" onclick="send('reject')">👎 Reject</button>
     <button class="btn-secondary" onclick="send('openInBrowser')">🌐 Open in Browser</button>
     <button class="btn-secondary" onclick="send('copyLink')">📋 Copy Link</button>
+    <button class="btn-secondary" onclick="send('checkout')">📥 Checkout Branch</button>
   </div>
 
   <dl class="info-grid">

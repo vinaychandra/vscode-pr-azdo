@@ -81,7 +81,7 @@ suite('PullRequestTreeItem', () => {
         const pr = makePr();
         const item = new PullRequestTreeItem(pr);
         assert.ok(item.command);
-        assert.strictEqual(item.command.command, 'vscode-pr-azdo.openPullRequest');
+        assert.strictEqual(item.command.command, 'vscode-pr-azdo.prItemClick');
         assert.deepStrictEqual(item.command.arguments, [pr]);
     });
 
