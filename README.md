@@ -69,7 +69,7 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 - **`/review-quick`** — high-level summary of PR changes and key concerns
 - **Context-aware review scope** — when your working tree is dirty or has unpushed commits, a QuickPick lets you choose exactly what to review: staged changes, unstaged changes, all uncommitted changes, unpushed commits only, or everything vs the remote target
 - **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change
-- **Post Reply** button — post an AI-drafted reply directly to Azure DevOps
+- **Post Reply** button — post an AI-drafted reply directly to Azure DevOps; the reply is prefilled as an editable inline comment so you can review and edit it in context before posting
 - Uses workspace tools to read files and search symbols before responding — no guessing
 - Customizable system prompts via settings (`vscode-pr-azdo.prompts.*`)
 
@@ -114,6 +114,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 ### Unreleased
 
 - **Context-aware review mode** — "Review with Copilot" and "Standalone Review" detect git state and offer scope options (staged, unstaged, uncommitted, unpushed, or vs target)
+- **Inline reply drafts** — AI-suggested replies are prefilled as editable inline comments instead of a small input box
 
 ### 0.0.5
 

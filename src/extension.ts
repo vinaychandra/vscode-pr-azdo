@@ -454,6 +454,41 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.submitComment', async (reply: vscode.CommentReply) => {
 			if (!reply) { return; }
 
+			// Reply draft on existing thread → post as reply to AzDO thread
+			if (commentController.hasReplyDraft(reply.thread)) {
+				const draftInfo = commentController.getReplyDraftInfo(reply.thread);
+				if (!draftInfo || !prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+					vscode.window.showWarningMessage('No active PR context.');
+					return;
+				}
+				const prId = activePrProvider._activePrForContext.pullRequestId;
+				// Use the submit box text if provided, otherwise use the draft body
+				const body = reply.text.trim() || draftInfo.body;
+				if (!body.trim()) {
+					vscode.window.showWarningMessage('Reply cannot be empty.');
+					return;
+				}
+				try {
+					outputChannel.appendLine(`[ai] Posting reply draft to thread ${draftInfo.azdoThreadId}`);
+					const created = await prService.createComment(prId, draftInfo.azdoThreadId, body);
+					commentController.removeReplyDraft(reply.thread);
+					// Optimistically append the posted reply
+					reply.thread.comments = [...reply.thread.comments, {
+						body: new vscode.MarkdownString(body),
+						mode: vscode.CommentMode.Preview,
+						author: { name: created.author?.displayName ?? 'You' },
+						timestamp: created.publishedDate ? new Date(created.publishedDate) : new Date(),
+					}];
+					vscode.window.showInformationMessage('Reply posted to Azure DevOps.');
+					activePrProvider.refresh();
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[ai] Failed to post reply draft: ${msg}`);
+					vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+				}
+				return;
+			}
+
 			// Draft thread → post to AzDO with the (possibly edited) text
 			if (commentController.isDraft(reply.thread)) {
 				const info = commentController.getDraftInfo(reply.thread);
@@ -631,28 +666,49 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const reply = await vscode.window.showInputBox({
-				prompt: 'Edit the reply before posting (or press Enter to post as-is)',
-				placeHolder: 'Type your reply…',
-				value: prefillText ?? '',
-			});
-
-			if (reply === undefined) { return; } // cancelled
-			if (!reply.trim()) {
-				vscode.window.showWarningMessage('Reply cannot be empty.');
+			const text = prefillText?.trim();
+			if (!text) {
+				vscode.window.showWarningMessage('No reply text provided.');
 				return;
 			}
 
-			const prId = activePrProvider._activePrForContext.pullRequestId;
+			// Find the VS Code comment thread for this AzDO thread
+			const vsThread = commentController.findThreadByAzdoId(threadId);
+			if (!vsThread) {
+				outputChannel.appendLine(`[ai] postAiReply: thread ${threadId} not found inline — falling back to input box`);
+				const reply = await vscode.window.showInputBox({
+					prompt: 'Edit the reply before posting (or press Enter to post as-is)',
+					placeHolder: 'Type your reply…',
+					value: text,
+				});
+				if (reply === undefined || !reply.trim()) { return; }
+				const prId = activePrProvider._activePrForContext.pullRequestId;
+				try {
+					await prService.createComment(prId, threadId, reply);
+					outputChannel.appendLine(`[ai] Posted reply to thread ${threadId} (input box fallback)`);
+					vscode.window.showInformationMessage('Reply posted to Azure DevOps.');
+					activePrProvider.refresh();
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[ai] Failed to post reply: ${msg}`);
+					vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+				}
+				return;
+			}
+
+			// Prefill reply as an editable comment in the thread
+			commentController.prefillReplyDraft(vsThread, text);
+			outputChannel.appendLine(`[ai] Prefilled reply draft on thread ${threadId}`);
+
+			// Navigate to the file and line so the user can see the draft
 			try {
-				await prService.createComment(prId, threadId, reply);
-				outputChannel.appendLine(`[ai] Posted reply to thread ${threadId}`);
-				vscode.window.showInformationMessage('Reply posted to Azure DevOps.');
-				activePrProvider.refresh();
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				outputChannel.appendLine(`[ai] Failed to post reply: ${msg}`);
-				vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+				const doc = await vscode.workspace.openTextDocument(vsThread.uri);
+				const editor = await vscode.window.showTextDocument(doc, { preview: false });
+				const line = vsThread.range?.start.line ?? 0;
+				const pos = new vscode.Position(line, 0);
+				editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+			} catch {
+				// Non-critical — the draft is still in the thread
 			}
 		}),
 	);
@@ -819,6 +875,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			if (vsThread && commentController.isDraft(vsThread)) {
 				commentController.disposeDraft(vsThread);
+			} else if (vsThread && commentController.hasReplyDraft(vsThread)) {
+				commentController.removeReplyDraft(vsThread);
 			}
 		}),
 	);
@@ -830,12 +888,58 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!comment) { return; }
 
 			const vsThread = commentController.findThreadForComment(comment);
-			if (!vsThread || !commentController.isDraft(vsThread)) {
-				vscode.window.showWarningMessage('Not a draft comment.');
+			if (!vsThread) {
+				vscode.window.showWarningMessage('Cannot identify comment thread.');
 				return;
 			}
+
 			if (!prService || !activePrProvider?._activePrForContext?.pullRequestId) {
 				vscode.window.showWarningMessage('No active PR context.');
+				return;
+			}
+
+			const prId = activePrProvider._activePrForContext.pullRequestId;
+
+			// Reply draft on existing thread → post as reply
+			if (commentController.hasReplyDraft(vsThread)) {
+				const draftInfo = commentController.getReplyDraftInfo(vsThread);
+				if (!draftInfo) {
+					vscode.window.showWarningMessage('Cannot read reply draft info.');
+					return;
+				}
+				// Read the (possibly edited) body from the comment argument
+				const editedBody = typeof comment.body === 'string'
+					? comment.body
+					: (comment.body as vscode.MarkdownString)?.value ?? '';
+				const body = editedBody.trim() || draftInfo.body;
+				if (!body.trim()) {
+					vscode.window.showWarningMessage('Reply cannot be empty.');
+					return;
+				}
+				try {
+					outputChannel.appendLine(`[ai] Posting edited reply draft to thread ${draftInfo.azdoThreadId}`);
+					const created = await prService.createComment(prId, draftInfo.azdoThreadId, body);
+					commentController.removeReplyDraft(vsThread);
+					// Optimistically append the posted reply
+					vsThread.comments = [...vsThread.comments, {
+						body: new vscode.MarkdownString(body),
+						mode: vscode.CommentMode.Preview,
+						author: { name: created.author?.displayName ?? 'You' },
+						timestamp: created.publishedDate ? new Date(created.publishedDate) : new Date(),
+					}];
+					vscode.window.showInformationMessage('Reply posted to Azure DevOps.');
+					activePrProvider.refresh();
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[ai] Failed to post reply draft: ${msg}`);
+					vscode.window.showErrorMessage(`Failed to post reply: ${msg}`);
+				}
+				return;
+			}
+
+			// Regular draft thread → post as new thread
+			if (!commentController.isDraft(vsThread)) {
+				vscode.window.showWarningMessage('Not a draft comment.');
 				return;
 			}
 
@@ -851,7 +955,6 @@ export async function activate(context: vscode.ExtensionContext) {
 				: (comment.body as vscode.MarkdownString)?.value ?? '';
 			const body = editedBody.trim() || info.body;
 
-			const prId = activePrProvider._activePrForContext.pullRequestId;
 			try {
 				outputChannel.appendLine(`[ai] Posting edited draft on ${info.filePath} L${info.line}`);
 				await prService.createThread(prId, body, {

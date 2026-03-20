@@ -318,6 +318,11 @@
           "command": "vscode-pr-azdo.dismissDraft",
           "when": "commentThread =~ /azdoPrDraft/",
           "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.dismissDraft",
+          "when": "commentThread =~ /replyDraft/",
+          "group": "navigation"
         }
       ],
       "comments/commentThread/context": [
@@ -358,6 +363,11 @@
         {
           "command": "vscode-pr-azdo.postDraftFromEdit",
           "when": "commentThread =~ /azdoPrDraft/",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.postDraftFromEdit",
+          "when": "commentThread =~ /replyDraft/",
           "group": "inline"
         },
         {

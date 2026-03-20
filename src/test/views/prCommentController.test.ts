@@ -387,4 +387,34 @@ suite('PrCommentController', () => {
         assert.strictEqual(thread.comments.length, 1);
         controller.dispose();
     });
+
+    // --- Reply draft methods ---
+
+    test('findThreadByAzdoId returns undefined when no threads exist', () => {
+        const controller = new PrCommentController(createMockLog());
+        assert.strictEqual(controller.findThreadByAzdoId(42), undefined);
+        controller.dispose();
+    });
+
+    test('hasReplyDraft returns false for unknown thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.hasReplyDraft(fakeThread), false);
+        controller.dispose();
+    });
+
+    test('getReplyDraftInfo returns undefined for unknown thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.getReplyDraftInfo(fakeThread), undefined);
+        controller.dispose();
+    });
+
+    test('removeReplyDraft is no-op for non-draft thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        // Should not throw
+        controller.removeReplyDraft(fakeThread);
+        controller.dispose();
+    });
 });

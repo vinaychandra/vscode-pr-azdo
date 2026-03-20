@@ -769,6 +769,82 @@ export class PrCommentController implements vscode.Disposable {
         return this._draftThreads.length;
     }
 
+    // ------------------------------------------------------------------
+    // Reply draft: prefill an editable reply on an existing AzDO thread
+    // ------------------------------------------------------------------
+
+    /** Threads that have a pending reply draft appended. */
+    private _replyDraftThreads = new Map<vscode.CommentThread, { azdoThreadId: number; originalCommentCount: number }>();
+
+    /**
+     * Find the VS Code CommentThread that corresponds to a given AzDO thread ID.
+     */
+    findThreadByAzdoId(azdoThreadId: number): vscode.CommentThread | undefined {
+        for (const [thread, meta] of this._threadMetaMap) {
+            if (meta.id === azdoThreadId) {
+                return thread;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Add an editable reply draft to an existing comment thread.
+     * The draft appears as the last comment in editing mode so the user
+     * can modify the text and submit via the normal reply flow.
+     */
+    prefillReplyDraft(thread: vscode.CommentThread, text: string): void {
+        // Remove any existing reply draft on this thread first
+        this.removeReplyDraft(thread);
+
+        const originalCount = thread.comments.length;
+        const draftComment: vscode.Comment = {
+            body: new vscode.MarkdownString(text),
+            mode: vscode.CommentMode.Editing,
+            author: { name: '✨ AI Reply Draft' },
+        };
+        thread.comments = [...thread.comments, draftComment];
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+        // Tag the thread so package.json menu contributions show submit/dismiss buttons
+        thread.contextValue = 'azdoPrThread-replyDraft';
+
+        const azdoThreadId = this._threadMetaMap.get(thread)?.id;
+        if (azdoThreadId) {
+            this._replyDraftThreads.set(thread, { azdoThreadId, originalCommentCount: originalCount });
+        }
+        this.log.appendLine(`[comments] Prefilled reply draft on thread ${azdoThreadId}: ${text.substring(0, 60)}…`);
+    }
+
+    /** Check if a thread has a pending reply draft. */
+    hasReplyDraft(thread: vscode.CommentThread): boolean {
+        return this._replyDraftThreads.has(thread);
+    }
+
+    /** Get the reply draft info for posting. */
+    getReplyDraftInfo(thread: vscode.CommentThread): { azdoThreadId: number; body: string } | undefined {
+        const info = this._replyDraftThreads.get(thread);
+        if (!info) { return undefined; }
+        // The draft comment is the last one in the list
+        const draftComment = thread.comments[thread.comments.length - 1];
+        if (!draftComment) { return undefined; }
+        const body = typeof draftComment.body === 'string'
+            ? draftComment.body
+            : (draftComment.body as vscode.MarkdownString)?.value ?? '';
+        return { azdoThreadId: info.azdoThreadId, body };
+    }
+
+    /** Remove the reply draft comment from a thread (restore original comments). */
+    removeReplyDraft(thread: vscode.CommentThread): void {
+        const info = this._replyDraftThreads.get(thread);
+        if (!info) { return; }
+        // Restore comments to original set (remove the appended draft)
+        thread.comments = thread.comments.slice(0, info.originalCommentCount);
+        // Restore the original contextValue so menu buttons revert to normal
+        thread.contextValue = 'azdoPrThread';
+        this._replyDraftThreads.delete(thread);
+        this.log.appendLine(`[comments] Removed reply draft from thread ${info.azdoThreadId}`);
+    }
+
     dispose(): void {
         this.disposeThreads();
         this.clearDrafts();

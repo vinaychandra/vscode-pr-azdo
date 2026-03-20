@@ -13,6 +13,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
   - **Clean + unpushed commits** — choose between reviewing only unpushed commits or all changes vs the remote target
   - **Dirty working tree** — choose from staged changes only, unstaged changes only, all uncommitted changes vs last commit, committed but non-pushed changes, or everything vs the remote target
 - **Review mode passed to AI** — the chat participant now shows what scope of changes it is reviewing in progress messages and context sent to the language model
+- **Inline reply drafts** — "Post Reply to Thread" now prefills the AI-suggested reply as an editable comment directly in the inline thread instead of a small input box; edit in place and submit or dismiss with the familiar checkmark/dismiss buttons
 
 ## [0.0.5]
 
