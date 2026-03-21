@@ -455,6 +455,11 @@
           "default": false,
           "markdownDescription": "Reset comment filters to **Active Comments** and **All Authors** when switching to a different pull request."
         },
+        "vscode-pr-azdo.autoDeleteBranchOnSwitch": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Automatically delete the local branch when checking out a different PR. Only applies to branches that were checked out via this extension."
+        },
         "vscode-pr-azdo.prompts.fixComment": {
           "type": "string",
           "default": "",

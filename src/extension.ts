@@ -110,6 +110,40 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- Review Mode ---
 	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
 
+	// Track branches checked out by the extension (for auto-delete on switch)
+	function getExtensionCheckedOutBranches(): Set<string> {
+		const arr = context.workspaceState.get<string[]>('extensionCheckedOutBranches', []);
+		return new Set(arr);
+	}
+	function trackCheckedOutBranch(branchName: string): void {
+		const branches = getExtensionCheckedOutBranches();
+		branches.add(branchName);
+		void context.workspaceState.update('extensionCheckedOutBranches', [...branches]);
+	}
+	function untrackCheckedOutBranch(branchName: string): void {
+		const branches = getExtensionCheckedOutBranches();
+		branches.delete(branchName);
+		void context.workspaceState.update('extensionCheckedOutBranches', [...branches]);
+	}
+	async function autoDeletePreviousBranch(repoRoot: string, previousBranch: string | undefined): Promise<void> {
+		if (!previousBranch) { return; }
+		const autoDelete = vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('autoDeleteBranchOnSwitch', false);
+		if (!autoDelete) { return; }
+		if (!getExtensionCheckedOutBranches().has(previousBranch)) {
+			outputChannel.appendLine(`[auto-delete] Skipping "${previousBranch}" — not checked out by extension`);
+			return;
+		}
+		outputChannel.appendLine(`[auto-delete] Deleting previous branch: ${previousBranch}`);
+		try {
+			await deleteLocalBranch(repoRoot, previousBranch);
+			untrackCheckedOutBranch(previousBranch);
+			outputChannel.appendLine(`[auto-delete] Deleted "${previousBranch}"`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			outputChannel.appendLine(`[auto-delete] Failed to delete "${previousBranch}": ${msg}`);
+		}
+	}
+
 	const reviewModeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 	reviewModeStatusBar.command = 'vscode-pr-azdo.toggleReviewMode';
 	context.subscriptions.push(reviewModeStatusBar);
@@ -1176,6 +1210,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
+			// Capture current branch for potential auto-delete after successful checkout
+			const previousBranch = repo.state.HEAD?.name;
+
 			// Check for dirty working tree before attempting checkout
 			const workingChanges = repo.state.workingTreeChanges?.length ?? 0;
 			const indexChanges = repo.state.indexChanges?.length ?? 0;
@@ -1202,6 +1239,8 @@ export async function activate(context: vscode.ExtensionContext) {
 							},
 						);
 						outputChannel.appendLine(`[checkout] Stash + checkout succeeded for ${branchName}`);
+						trackCheckedOutBranch(branchName);
+						await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
 						vscode.window.showInformationMessage(
 							`Checked out \`${branchName}\`. Your changes were stashed — use \`git stash pop\` to restore them.`,
 						);
@@ -1233,6 +1272,8 @@ export async function activate(context: vscode.ExtensionContext) {
 					},
 				);
 				outputChannel.appendLine(`[checkout] Successfully checked out ${branchName}`);
+				trackCheckedOutBranch(branchName);
+				await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
 				// Enable review mode by default when checking out a PR branch
 				if (!reviewMode) {
 					reviewMode = true;
@@ -1283,6 +1324,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				await deleteLocalBranch(repoRoot, branchName);
 				outputChannel.appendLine(`[delete-branch] Deleted local branch: ${branchName}`);
+				untrackCheckedOutBranch(branchName);
 				vscode.window.showInformationMessage(`Deleted local branch "${branchName}".`);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -1298,6 +1340,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					try {
 						await deleteLocalBranch(repoRoot, branchName, true);
 						outputChannel.appendLine(`[delete-branch] Force-deleted local branch: ${branchName}`);
+						untrackCheckedOutBranch(branchName);
 						vscode.window.showInformationMessage(`Force-deleted local branch "${branchName}".`);
 					} catch (forceErr) {
 						const forceMsg = forceErr instanceof Error ? forceErr.message : String(forceErr);
