@@ -272,6 +272,12 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._allThreads = undefined;
             this._iterations = undefined;
             this._reviewedFiles.clear();
+
+            const resetFilters = vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('resetFiltersOnPrChange', false);
+            if (resetFilters) {
+                this._commentFilter = 'active';
+                this._authorFilter = null;
+            }
         }
         this._onDidChangeTreeData.fire();
         if (changed) {

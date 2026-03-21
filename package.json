@@ -450,6 +450,11 @@
     "configuration": {
       "title": "Azure DevOps PR",
       "properties": {
+        "vscode-pr-azdo.resetFiltersOnPrChange": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Reset comment filters to **Active Comments** and **All Authors** when switching to a different pull request."
+        },
         "vscode-pr-azdo.prompts.fixComment": {
           "type": "string",
           "default": "",

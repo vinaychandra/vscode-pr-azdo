@@ -115,6 +115,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ### 0.0.6
 
+- **Reset filters on PR change** — new setting `vscode-pr-azdo.resetFiltersOnPrChange` resets comment filters to defaults when switching PRs
 - **Expand All beside Collapse All** — the expand-all button now renders next to the built-in collapse-all button
 - **Copilot instruction file support** — AI prompts now tell the LM to read `.github/copilot-instructions.md`, `.instructions.md` files, and `.copilot/` directory contents before responding, so repo-level and directory-scoped coding guidelines are honored
 - **Context-aware review mode** — "Review with Copilot" and "Standalone Review" detect git state and offer scope options (staged, unstaged, uncommitted, unpushed, or vs target)
