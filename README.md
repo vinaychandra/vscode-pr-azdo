@@ -115,6 +115,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ### 0.0.6
 
+- **Auto-expand files on PR open** — the file tree automatically expands when a new PR becomes active
 - **Auto-delete branch on PR switch** — new setting `vscode-pr-azdo.autoDeleteBranchOnSwitch` auto-deletes the previous branch when checking out a different PR (only for extension-initiated checkouts)
 - **Reset filters on PR change** — new setting `vscode-pr-azdo.resetFiltersOnPrChange` resets comment filters to defaults when switching PRs
 - **Expand All beside Collapse All** — the expand-all button now renders next to the built-in collapse-all button

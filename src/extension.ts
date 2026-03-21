@@ -249,6 +249,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			context.subscriptions.push(activePrProvider);
 
 			// Forward real provider's change events through stable proxy emitters
+			let lastExpandedPrId: number | undefined;
 			treeProviderSub = treeProvider.onDidChangeTreeData(() => {
 				proxyEmitter.fire();
 			});
@@ -270,6 +271,15 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 
 				activePrProxyEmitter.fire();
+
+				// Auto-expand the tree when a new PR becomes active
+				if (prId && prId !== lastExpandedPrId) {
+					lastExpandedPrId = prId;
+					// Delay slightly to let the tree render before expanding
+					setTimeout(() => {
+						void vscode.commands.executeCommand('vscode-pr-azdo.expandAll');
+					}, 500);
+				}
 			});
 			// Update inline comments only after threads are actually loaded.
 			// Wait for userId to resolve first so own-comment delete buttons appear immediately.
