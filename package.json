@@ -233,42 +233,42 @@
         {
           "command": "vscode-pr-azdo.refreshActivePr",
           "when": "view == azdo-pr.activePr",
-          "group": "navigation"
-        },
-        {
-          "command": "vscode-pr-azdo.expandAll",
-          "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "vscode-pr-azdo.reviewWithAI",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "vscode-pr-azdo.standaloneReview",
           "when": "view == azdo-pr.activePr && !vscode-pr-azdo:hasActivePr && vscode-pr-azdo:hasAzDoRepo",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "vscode-pr-azdo.createPullRequest",
           "when": "view == azdo-pr.activePr && !vscode-pr-azdo:hasActivePr && vscode-pr-azdo:hasAzDoRepo",
-          "group": "navigation"
+          "group": "navigation@3"
         },
         {
           "command": "vscode-pr-azdo.toggleReviewMode",
           "when": "view == azdo-pr.activePr",
-          "group": "navigation"
+          "group": "navigation@4"
         },
         {
           "command": "vscode-pr-azdo.filterComments",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:reviewMode",
-          "group": "navigation"
+          "group": "navigation@5"
         },
         {
           "command": "vscode-pr-azdo.filterCommentsByAuthor",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:reviewMode",
-          "group": "navigation"
+          "group": "navigation@6"
+        },
+        {
+          "command": "vscode-pr-azdo.expandAll",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
+          "group": "navigation@99"
         }
       ],
       "view/item/context": [
