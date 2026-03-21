@@ -10,6 +10,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Skip dirty checkout prompt** — new setting `vscode-pr-azdo.skipDirtyCheckoutPrompt` (default: off) skips the dirty working tree warning and proceeds as "Try Anyway"
 - **Auto-expand files on PR open** — the Active PR tree automatically expands all files when a new PR is detected
 - **Auto-delete branch on PR switch** — new setting `vscode-pr-azdo.autoDeleteBranchOnSwitch` (default: off) automatically deletes the local branch when checking out a different PR; only applies to branches checked out via the extension
 - **Reset filters on PR change** — new setting `vscode-pr-azdo.resetFiltersOnPrChange` (default: off) resets comment filters to "Active Comments" and "All Authors" when switching to a different pull request

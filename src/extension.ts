@@ -1235,46 +1235,51 @@ export async function activate(context: vscode.ExtensionContext) {
 			outputChannel.appendLine(`[checkout] branch=${branchName} dirty=${isDirty} (working=${workingChanges}, staged=${indexChanges})`);
 
 			if (isDirty) {
-				const choice = await vscode.window.showWarningMessage(
-					`You have ${workingChanges + indexChanges} uncommitted change(s). Checkout of \`${branchName}\` may fail.`,
-					'Stash & Checkout',
-					'Try Anyway',
-					'Cancel',
-				);
-				if (choice === 'Cancel' || !choice) { return; }
-				if (choice === 'Stash & Checkout') {
-					outputChannel.appendLine('[checkout] User chose Stash & Checkout');
-					try {
-						await vscode.window.withProgress(
-							{ location: vscode.ProgressLocation.Notification, title: `Stashing changes and checking out ${branchName}…` },
-							async () => {
-								await gitStash(repo.rootUri.fsPath, `Auto-stash before checkout of ${branchName}`);
-								await repo.fetch();
-								await repo.checkout(branchName);
-							},
-						);
-						outputChannel.appendLine(`[checkout] Stash + checkout succeeded for ${branchName}`);
-						trackCheckedOutBranch(branchName);
-						await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
-						vscode.window.showInformationMessage(
-							`Checked out \`${branchName}\`. Your changes were stashed — use \`git stash pop\` to restore them.`,
-						);
-						if (!reviewMode) {
-							reviewMode = true;
-							void context.workspaceState.update('reviewMode', true);
-							outputChannel.appendLine('[checkout] Enabled review mode for checked-out PR');
-							applyReviewMode();
+				const skipDirtyPrompt = vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('skipDirtyCheckoutPrompt', false);
+				if (skipDirtyPrompt) {
+					outputChannel.appendLine('[checkout] Skipping dirty prompt (skipDirtyCheckoutPrompt enabled)');
+				} else {
+					const choice = await vscode.window.showWarningMessage(
+						`You have ${workingChanges + indexChanges} uncommitted change(s). Checkout of \`${branchName}\` may fail.`,
+						'Stash & Checkout',
+						'Try Anyway',
+						'Cancel',
+					);
+					if (choice === 'Cancel' || !choice) { return; }
+					if (choice === 'Stash & Checkout') {
+						outputChannel.appendLine('[checkout] User chose Stash & Checkout');
+						try {
+							await vscode.window.withProgress(
+								{ location: vscode.ProgressLocation.Notification, title: `Stashing changes and checking out ${branchName}…` },
+								async () => {
+									await gitStash(repo.rootUri.fsPath, `Auto-stash before checkout of ${branchName}`);
+									await repo.fetch();
+									await repo.checkout(branchName);
+								},
+							);
+							outputChannel.appendLine(`[checkout] Stash + checkout succeeded for ${branchName}`);
+							trackCheckedOutBranch(branchName);
+							await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
+							vscode.window.showInformationMessage(
+								`Checked out \`${branchName}\`. Your changes were stashed — use \`git stash pop\` to restore them.`,
+							);
+							if (!reviewMode) {
+								reviewMode = true;
+								void context.workspaceState.update('reviewMode', true);
+								outputChannel.appendLine('[checkout] Enabled review mode for checked-out PR');
+								applyReviewMode();
+							}
+							return;
+						} catch (stashErr) {
+							const stashMsg = stashErr instanceof Error ? stashErr.message : String(stashErr);
+							outputChannel.appendLine(`[checkout] Stash + checkout failed: ${stashMsg}`);
+							vscode.window.showErrorMessage(`Failed to stash and checkout: ${stashMsg}`);
+							return;
 						}
-						return;
-					} catch (stashErr) {
-						const stashMsg = stashErr instanceof Error ? stashErr.message : String(stashErr);
-						outputChannel.appendLine(`[checkout] Stash + checkout failed: ${stashMsg}`);
-						vscode.window.showErrorMessage(`Failed to stash and checkout: ${stashMsg}`);
-						return;
 					}
-				}
-				// "Try Anyway" falls through to normal checkout below
-				outputChannel.appendLine('[checkout] User chose Try Anyway');
+					// "Try Anyway" falls through to normal checkout below
+					outputChannel.appendLine('[checkout] User chose Try Anyway');
+				} // end else (dirty prompt not skipped)
 			}
 
 			outputChannel.appendLine(`[checkout] Fetching and checking out branch: ${branchName}`);

@@ -460,6 +460,11 @@
           "default": false,
           "markdownDescription": "Automatically delete the local branch when checking out a different PR. Only applies to branches that were checked out via this extension."
         },
+        "vscode-pr-azdo.skipDirtyCheckoutPrompt": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Skip the dirty working tree warning when checking out a PR branch. Behaves as if you always chose **Try Anyway**."
+        },
         "vscode-pr-azdo.prompts.fixComment": {
           "type": "string",
           "default": "",
