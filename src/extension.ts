@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash } from './git/gitExtension';
+import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient } from './azdo/apiClient';
@@ -135,6 +135,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 		outputChannel.appendLine(`[auto-delete] Deleting previous branch: ${previousBranch}`);
 		try {
+			const inSync = await isBranchInSyncWithRemote(repoRoot, previousBranch);
+			if (!inSync) {
+				outputChannel.appendLine(`[auto-delete] Skipping "${previousBranch}" — local branch has unpushed commits or no upstream`);
+				return;
+			}
 			await deleteLocalBranch(repoRoot, previousBranch);
 			untrackCheckedOutBranch(previousBranch);
 			outputChannel.appendLine(`[auto-delete] Deleted "${previousBranch}"`);

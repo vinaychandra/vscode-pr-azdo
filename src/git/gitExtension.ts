@@ -57,6 +57,30 @@ export function deleteLocalBranch(repoRoot: string, branchName: string, force = 
 }
 
 /**
+ * Check whether a local branch is in sync with its remote tracking branch.
+ * Returns true if the branch has no unpushed commits (local == remote), false otherwise.
+ * Also returns false if there is no remote tracking branch.
+ */
+export function isBranchInSyncWithRemote(repoRoot: string, branchName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        execFile(
+            'git',
+            ['rev-parse', branchName, `${branchName}@{upstream}`],
+            { cwd: repoRoot },
+            (err, stdout) => {
+                if (err) {
+                    // No upstream configured or branch doesn't exist
+                    resolve(false);
+                    return;
+                }
+                const [local, remote] = stdout.trim().split('\n');
+                resolve(!!local && local === remote);
+            },
+        );
+    });
+}
+
+/**
  * Get the commit log between a target ref and HEAD.
  * Returns the log as a string (one line per commit: hash + subject).
  */
