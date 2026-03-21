@@ -18,10 +18,19 @@ const BLOCKED_TOOL_NAMES = new Set([
     'run_in_terminal', 'vscode_get_terminal_confirmation',
 ]);
 
+const MAX_TOOLS = 128;
+
 function getChatTools(): { name: string; description: string; inputSchema: object }[] {
-    return vscode.lm.tools
+    const all = vscode.lm.tools
         .filter(t => !BLOCKED_TOOL_NAMES.has(t.name))
         .map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? {} }));
+    if (all.length > MAX_TOOLS) {
+        void vscode.window.showWarningMessage(
+            `${all.length} tools available but the limit is ${MAX_TOOLS}. Some tools will not be available to the AI assistant.`,
+        );
+        return all.slice(0, MAX_TOOLS);
+    }
+    return all;
 }
 
 export const DEFAULT_REVIEW_PROMPT = `You are an expert code reviewer reviewing a pull request on Azure DevOps.
