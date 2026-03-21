@@ -113,13 +113,17 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
-### 0.0.6
+### 0.0.7
 
+- **Tool limit** — tools sent to the LM are capped at 128 with a warning if any are dropped
 - **Skip dirty checkout prompt** — new setting `vscode-pr-azdo.skipDirtyCheckoutPrompt` skips the uncommitted changes warning when checking out a PR branch
 - **Auto-expand files on PR open** — the file tree automatically expands when a new PR becomes active
-- **Auto-delete branch on PR switch** — new setting `vscode-pr-azdo.autoDeleteBranchOnSwitch` auto-deletes the previous branch when checking out a different PR (only for extension-initiated checkouts)
+- **Auto-delete branch on PR switch** — new setting `vscode-pr-azdo.autoDeleteBranchOnSwitch` auto-deletes the previous branch when checking out a different PR (only for extension-initiated checkouts, only if in sync with remote)
 - **Reset filters on PR change** — new setting `vscode-pr-azdo.resetFiltersOnPrChange` resets comment filters to defaults when switching PRs
 - **Expand All beside Collapse All** — the expand-all button now renders next to the built-in collapse-all button
+
+### 0.0.6
+
 - **Copilot instruction file support** — AI prompts now tell the LM to read `.github/copilot-instructions.md`, `.instructions.md` files, and `.copilot/` directory contents before responding, so repo-level and directory-scoped coding guidelines are honored
 - **Context-aware review mode** — "Review with Copilot" and "Standalone Review" detect git state and offer scope options (staged, unstaged, uncommitted, unpushed, or vs target)
 - **Inline reply drafts** — AI-suggested replies are prefilled as editable inline comments instead of a small input box

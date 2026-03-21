@@ -6,15 +6,21 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-## [0.0.6]
+## [0.0.7]
 
 ### Added
 
+- **Tool limit** — tools sent to the LM are capped at 128; a warning notification is shown if any are dropped
 - **Skip dirty checkout prompt** — new setting `vscode-pr-azdo.skipDirtyCheckoutPrompt` (default: off) skips the dirty working tree warning and proceeds as "Try Anyway"
 - **Auto-expand files on PR open** — the Active PR tree automatically expands all files when a new PR is detected
 - **Auto-delete branch on PR switch** — new setting `vscode-pr-azdo.autoDeleteBranchOnSwitch` (default: off) automatically deletes the local branch when checking out a different PR; only applies to branches checked out via the extension
 - **Reset filters on PR change** — new setting `vscode-pr-azdo.resetFiltersOnPrChange` (default: off) resets comment filters to "Active Comments" and "All Authors" when switching to a different pull request
 - **Expand All beside Collapse All** — the expand-all button now renders next to the built-in collapse-all button in the Active PR view title bar
+
+## [0.0.6]
+
+### Added
+
 - **Copilot instruction file support** — all AI prompts (`/fix`, `/review`, `/review-quick`, `/review-branch`, and PR description generation) now instruct the LM to search for and read user instruction files before responding: `.github/copilot-instructions.md` (repo-level), `**/.instructions.md` (directory-scoped), and `.copilot/` directory contents
 - **Context-aware review mode selection** — "Review with Copilot" and "Standalone Review" now detect your git working tree state and offer appropriate review scopes:
   - **Clean + pushed** — auto-proceeds with diff against the remote target branch (previous behavior)
