@@ -1,4 +1,4 @@
-import type { AzDoRemoteInfo } from './remoteInfo';
+import type { ParsedAzDoRemote } from './remoteInfo';
 
 // --- HTTPS: dev.azure.com ---
 // https://dev.azure.com/{org}/{project}/_git/{repo}
@@ -34,7 +34,7 @@ const PATTERNS: ReadonlyArray<RegExp> = [
  * repository information. Returns `undefined` if the URL is not a recognized
  * Azure DevOps remote.
  */
-export function parseAzDoRemote(url: string, remoteName: string): AzDoRemoteInfo | undefined {
+export function parseAzDoRemote(url: string, remoteName: string): ParsedAzDoRemote | undefined {
     for (const pattern of PATTERNS) {
         const match = url.match(pattern);
         if (match) {

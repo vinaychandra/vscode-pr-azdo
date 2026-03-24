@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import type { API } from '../typings/git';
+import type { RepositoryDetector } from '../azdo/repositoryDetector';
+import { getActiveRepository } from '../git/gitExtension';
 
 /**
  * URI scheme for showing file content at a specific git ref.
@@ -23,6 +25,7 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
     constructor(
         private readonly log: vscode.OutputChannel,
         private readonly gitApi?: API,
+        private readonly detector?: RepositoryDetector,
     ) { }
 
     async provideTextDocumentContent(uri: vscode.Uri, _token: vscode.CancellationToken): Promise<string> {
@@ -42,7 +45,7 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
         const params = new URLSearchParams(uri.query);
         const ref = params.get('ref') ?? 'HEAD';
 
-        const repoRoot = this.gitApi?.repositories[0]?.rootUri.fsPath
+        const repoRoot = (this.detector ? getActiveRepository(this.gitApi, this.detector) : this.gitApi?.repositories[0])?.rootUri.fsPath
             ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!repoRoot) {
             this.log.appendLine(`[git-content] No repo root or workspace root`);

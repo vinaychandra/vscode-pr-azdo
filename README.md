@@ -80,6 +80,12 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 - Works correctly when VS Code is opened on a subfolder of the git repository
 - All file resolution (diffs, comments, AI context) uses the git repo root, not the workspace folder
 
+### Git Worktree Support
+
+- Works correctly with git worktrees — checkout, comments, diffs, and AI review all target the correct worktree directory
+- Automatically detects which repository contains the Azure DevOps remote, rather than assuming `repositories[0]`
+- In multi-root workspaces with both a main checkout and worktrees, operations target the matched repository
+
 ## Requirements
 
 - **VS Code** 1.110.0 or later
@@ -94,21 +100,21 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Extension Commands
 
-| Command                                        | Description                                          |
-| ---------------------------------------------- | ---------------------------------------------------- |
-| `Azure DevOps PR: Sign In`                     | Authenticate with Azure DevOps                       |
-| `Azure DevOps PR: Switch Account / Tenant`     | Force re-authentication (multi-tenant scenarios)     |
-| `Azure DevOps PR: Clear Auth Cache`            | Clear cached tenant mappings and reset connection    |
-| `Azure DevOps PR: Show Detection Status`       | Show detected org/project/repo                       |
-| `Azure DevOps PR: Verify API Connection`       | Test API connectivity and list active PRs            |
-| `Toggle Review Mode`                           | Show/hide comments and gutter icons                  |
-| `Filter Comments`                        | Switch between Active and All comment threads        |
-| `Refresh`                                | Re-fetch PR list or active PR data                   |
-| `Checkout Branch`                        | Fetch and checkout a PR's source branch              |
-| `Delete Local Branch`                    | Delete the checked-out PR branch (with force option) |
-| `Review with Copilot`                    | Start an AI code review of the active PR             |
-| `Azure DevOps PR: Reset AI Prompts`      | Reset custom AI prompts to defaults                  |
-| `Azure DevOps PR: View Default Prompts`  | View the built-in system prompts                     |
+| Command                                    | Description                                          |
+| ------------------------------------------ | ---------------------------------------------------- |
+| `Azure DevOps PR: Sign In`                 | Authenticate with Azure DevOps                       |
+| `Azure DevOps PR: Switch Account / Tenant` | Force re-authentication (multi-tenant scenarios)     |
+| `Azure DevOps PR: Clear Auth Cache`        | Clear cached tenant mappings and reset connection    |
+| `Azure DevOps PR: Show Detection Status`   | Show detected org/project/repo                       |
+| `Azure DevOps PR: Verify API Connection`   | Test API connectivity and list active PRs            |
+| `Toggle Review Mode`                       | Show/hide comments and gutter icons                  |
+| `Filter Comments`                          | Switch between Active and All comment threads        |
+| `Refresh`                                  | Re-fetch PR list or active PR data                   |
+| `Checkout Branch`                          | Fetch and checkout a PR's source branch              |
+| `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
+| `Review with Copilot`                      | Start an AI code review of the active PR             |
+| `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |
+| `Azure DevOps PR: View Default Prompts`    | View the built-in system prompts                     |
 
 ## Known Issues
 

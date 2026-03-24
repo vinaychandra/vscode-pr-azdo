@@ -5,6 +5,8 @@ import type { PrCommentController } from '../views/prCommentController';
 import { hasSuggestion, extractSuggestion } from '../views/suggestionRenderer';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { API } from '../typings/git';
+import type { RepositoryDetector } from '../azdo/repositoryDetector';
+import { getActiveRepository } from '../git/gitExtension';
 import { type ReviewMode, buildGitDiffArgs, reviewModeLabel } from '../git/gitStateDetector';
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
@@ -178,10 +180,11 @@ export function registerPrChatParticipant(
     commentController: PrCommentController,
     log: vscode.OutputChannel,
     gitApi?: API,
+    detector?: RepositoryDetector,
 ): vscode.Disposable {
     /** Resolve the git repo root, falling back to workspace folder. */
     function getRepoRoot(): vscode.Uri | undefined {
-        return gitApi?.repositories[0]?.rootUri
+        return (detector ? getActiveRepository(gitApi, detector) : gitApi?.repositories[0])?.rootUri
             ?? vscode.workspace.workspaceFolders?.[0]?.uri;
     }
     const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token) => {
@@ -189,12 +192,12 @@ export function registerPrChatParticipant(
 
         // Route to review handler
         if (request.command === 'review' || request.command === 'review-quick') {
-            return handleReview(request, stream, token, contextProvider, commentController, log, gitApi);
+            return handleReview(request, stream, token, contextProvider, commentController, log, gitApi, detector);
         }
 
         // Route to standalone branch review (no active PR needed)
         if (request.command === 'review-branch') {
-            return handleReviewBranch(request, stream, token, commentController, log, gitApi);
+            return handleReviewBranch(request, stream, token, commentController, log, gitApi, detector);
         }
 
         // Build the LM messages
@@ -477,8 +480,9 @@ async function handleReviewBranch(
     commentCtrl: PrCommentController,
     log: vscode.OutputChannel,
     gitApi?: API,
+    detector?: RepositoryDetector,
 ): Promise<vscode.ChatResult> {
-    const repo = gitApi?.repositories[0];
+    const repo = detector ? getActiveRepository(gitApi, detector) : gitApi?.repositories[0];
     if (!repo) {
         stream.markdown('No git repository found.');
         return { metadata: {} };
@@ -643,6 +647,7 @@ async function handleReview(
     commentCtrl: PrCommentController,
     log: vscode.OutputChannel,
     gitApi?: API,
+    detector?: RepositoryDetector,
 ): Promise<vscode.ChatResult> {
     const isQuick = request.command === 'review-quick';
     const filePaths = contextProvider.changedFilePaths;
@@ -651,7 +656,8 @@ async function handleReview(
         return { metadata: {} };
     }
 
-    const workspaceRoot = gitApi?.repositories[0]?.rootUri
+    const activeRepo = detector ? getActiveRepository(gitApi, detector) : gitApi?.repositories[0];
+    const workspaceRoot = activeRepo?.rootUri
         ?? vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!workspaceRoot) {
         stream.markdown('No workspace root found.');
@@ -667,7 +673,7 @@ async function handleReview(
     const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
     const targetRef = `origin/${targetBranch}`;
     const cwd = workspaceRoot.fsPath;
-    const currentBranch = gitApi?.repositories[0]?.state.HEAD?.name;
+    const currentBranch = activeRepo?.state.HEAD?.name;
     const currentBranchRef = currentBranch ? `origin/${currentBranch}` : undefined;
 
     // For non-target modes, don't scope to PR files (review all dirty/uncommitted files)

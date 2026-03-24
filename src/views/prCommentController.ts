@@ -5,6 +5,8 @@ import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionA
 import type { PullRequestService } from '../azdo/prService';
 import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
 import type { API } from '../typings/git';
+import type { RepositoryDetector } from '../azdo/repositoryDetector';
+import { getActiveRepository } from '../git/gitExtension';
 
 /** URI scheme for the virtual PR-level comments document. */
 export const PR_COMMENTS_SCHEME = 'azdo-pr-comments';
@@ -33,7 +35,7 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Resolve the root URI for mapping repo-relative paths to file URIs. */
     private get _workspaceRoot(): vscode.Uri | undefined {
-        return this.gitApi?.repositories[0]?.rootUri
+        return (this.detector ? getActiveRepository(this.gitApi, this.detector) : this.gitApi?.repositories[0])?.rootUri
             ?? vscode.workspace.workspaceFolders?.[0]?.uri;
     }
 
@@ -54,7 +56,7 @@ export class PrCommentController implements vscode.Disposable {
     private readonly _onDidPerformAction = new vscode.EventEmitter<void>();
     readonly onDidPerformAction = this._onDidPerformAction.event;
 
-    constructor(private readonly log: vscode.OutputChannel, private readonly gitApi?: API) {
+    constructor(private readonly log: vscode.OutputChannel, private readonly gitApi?: API, private readonly detector?: RepositoryDetector) {
         this._controller = vscode.comments.createCommentController(
             'azdo-pr-comments',
             'Azure DevOps PR Comments',

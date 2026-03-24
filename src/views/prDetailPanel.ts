@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestAsyncStatus, PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from '../azdo/apiClient';
-import type { AzDoRemoteInfo } from '../azdo/remoteInfo';
+import type { AzDoRemoteInfo, ParsedAzDoRemote } from '../azdo/remoteInfo';
 
 /** Messages sent from webview → extension. */
 interface WebviewMessage {
@@ -115,7 +115,7 @@ export class PrDetailPanel {
 // Pure / exported helpers
 // ---------------------------------------------------------------------------
 
-export function buildPrWebUrl(remoteInfo: AzDoRemoteInfo, prId: number): string {
+export function buildPrWebUrl(remoteInfo: ParsedAzDoRemote, prId: number): string {
     return `https://dev.azure.com/${encodeURIComponent(remoteInfo.organization)}/${encodeURIComponent(remoteInfo.project)}/_git/${encodeURIComponent(remoteInfo.repositoryName)}/pullrequest/${prId}`;
 }
 
@@ -124,7 +124,7 @@ export function buildPrWebUrl(remoteInfo: AzDoRemoteInfo, prId: number): string 
  * @param sourceBranch Short branch name (e.g. "feature/x"), not "refs/heads/...".
  * @param targetBranch Short branch name for the target (e.g. "main").
  */
-export function buildCreatePrUrl(remoteInfo: AzDoRemoteInfo, sourceBranch: string, targetBranch: string): string {
+export function buildCreatePrUrl(remoteInfo: ParsedAzDoRemote, sourceBranch: string, targetBranch: string): string {
     return `https://dev.azure.com/${encodeURIComponent(remoteInfo.organization)}/${encodeURIComponent(remoteInfo.project)}/_git/${encodeURIComponent(remoteInfo.repositoryName)}/pullrequestcreate?sourceRef=${encodeURIComponent(sourceBranch)}&targetRef=${encodeURIComponent(targetBranch)}`;
 }
 
@@ -172,7 +172,7 @@ export function mergeStatusLabel(status: PullRequestAsyncStatus | undefined): st
 // HTML builder (pure function for testability)
 // ---------------------------------------------------------------------------
 
-export function buildHtml(pr: GitPullRequest, remoteInfo: AzDoRemoteInfo): string {
+export function buildHtml(pr: GitPullRequest, remoteInfo: ParsedAzDoRemote): string {
     const shortRef = (r: string | undefined) => r?.replace(/^refs\/heads\//, '') ?? '';
     const created = pr.creationDate ? new Date(pr.creationDate).toLocaleString() : 'unknown';
     const closed = pr.closedDate ? new Date(pr.closedDate).toLocaleString() : null;

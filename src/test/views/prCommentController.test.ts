@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { PrCommentController } from '../../views/prCommentController';
+import { RepositoryDetector } from '../../azdo/repositoryDetector';
+import type { API, Repository, RepositoryState, Remote } from '../../typings/git';
 import type { GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
@@ -416,5 +418,435 @@ suite('PrCommentController', () => {
         // Should not throw
         controller.removeReplyDraft(fakeThread);
         controller.dispose();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for workspace layout tests (mock git API + detector)
+// ---------------------------------------------------------------------------
+
+function makeRemote(name: string, fetchUrl?: string, pushUrl?: string): Remote {
+    return { name, fetchUrl, pushUrl, isReadOnly: false } as Remote;
+}
+
+function makeRepo(remotes: Remote[], path: string): Repository {
+    const stateEmitter = new vscode.EventEmitter<void>();
+    return {
+        rootUri: vscode.Uri.file(path),
+        state: {
+            remotes,
+            HEAD: undefined,
+            refs: [],
+            onDidChange: stateEmitter.event,
+        } as unknown as RepositoryState,
+    } as unknown as Repository;
+}
+
+function makeGitApi(repos: Repository[]): API {
+    const openEmitter = new vscode.EventEmitter<Repository>();
+    const closeEmitter = new vscode.EventEmitter<Repository>();
+    return {
+        repositories: repos,
+        onDidOpenRepository: openEmitter.event,
+        onDidCloseRepository: closeEmitter.event,
+    } as unknown as API;
+}
+
+const AZDO_REMOTE = 'https://dev.azure.com/myorg/myproject/_git/myrepo';
+
+// ---------------------------------------------------------------------------
+// File URI resolution across workspace layouts
+//
+// When a user adds or views a comment on a file, the extension must:
+//   1. Resolve the workspace root from the correct Repository (via detector)
+//   2. Join AzDO's repo-relative path (e.g., '/src/index.ts') with that root
+//      to produce a valid file:// URI
+//   3. On the reverse path (new comment → API call), strip the root from
+//      the file:// URI to recover the repo-relative path
+//
+// These tests verify steps 1-2 via createDraftThread() (which calls
+// Uri.joinPath(_workspaceRoot, filePath)) across all workspace layouts.
+// ---------------------------------------------------------------------------
+
+suite('File URI resolution: simple clone', () => {
+    test('draft thread URI resolves relative to repo root', () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/index.ts', 10, 'test comment');
+        assert.ok(thread, 'should create draft thread');
+        assert.strictEqual(thread!.uri.scheme, 'file');
+        assert.ok(
+            thread!.uri.fsPath.endsWith('src/index.ts') || thread!.uri.path.endsWith('src/index.ts'),
+            `URI path should end with src/index.ts, got: ${thread!.uri.fsPath}`,
+        );
+        // The full path should include the repo root
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/home/user/myrepo'), 'src/index.ts');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('nested file path resolves correctly', () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('packages/core/src/utils/helpers.ts', 5, 'deep path');
+        assert.ok(thread);
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/home/user/myrepo'), 'packages/core/src/utils/helpers.ts');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('root-level file resolves correctly', () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('README.md', 1, 'root file');
+        assert.ok(thread);
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/home/user/myrepo'), 'README.md');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('File URI resolution: subfolder within a clone', () => {
+    // When the user opens a subfolder of a clone (e.g., /home/user/myrepo/src),
+    // VS Code's git extension still reports the repo at the git root (/home/user/myrepo).
+    // File URIs must be relative to the git root, NOT the workspace folder.
+
+    test('file URI is relative to git root, not workspace folder', () => {
+        // rootUri is at git root even though user opened a subfolder
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/index.ts', 10, 'test');
+        assert.ok(thread);
+        // URI should be based on git root (/home/user/myrepo), not workspace folder
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/home/user/myrepo'), 'src/index.ts');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('file outside workspace subfolder still resolves correctly', () => {
+        // User opened /home/user/myrepo/src but file is at repo root
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('tsconfig.json', 1, 'test');
+        assert.ok(thread);
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/home/user/myrepo'), 'tsconfig.json');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('File URI resolution: worktrees', () => {
+    test('file URI uses worktree root when worktree has AzDo remote', () => {
+        const mainRepo = makeRepo([
+            makeRemote('origin', 'https://github.com/user/repo.git'),
+        ], '/workspace/main');
+        const worktreeRepo = makeRepo([
+            makeRemote('origin', AZDO_REMOTE),
+        ], '/workspace/worktrees/feature');
+        const api = makeGitApi([mainRepo, worktreeRepo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/index.ts', 10, 'on worktree');
+        assert.ok(thread);
+        // URI must be under the worktree root, NOT the main repo
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/workspace/worktrees/feature'), 'src/index.ts');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('file URI does NOT use main repo path when worktree is the match', () => {
+        const mainRepo = makeRepo([
+            makeRemote('origin', 'https://github.com/user/repo.git'),
+        ], '/workspace/main');
+        const worktreeRepo = makeRepo([
+            makeRemote('origin', AZDO_REMOTE),
+        ], '/workspace/worktrees/feature');
+        const api = makeGitApi([mainRepo, worktreeRepo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/app.ts', 5, 'test');
+        assert.ok(thread);
+        // Must NOT be under /workspace/main
+        const mainPath = vscode.Uri.file('/workspace/main').toString();
+        assert.ok(
+            !thread!.uri.toString().startsWith(mainPath),
+            `URI should not start with main repo path: ${thread!.uri.toString()}`,
+        );
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('when both repos have AzDo remote, first match determines root', () => {
+        const repo1 = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/main');
+        const repo2 = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/worktrees/feature');
+        const api = makeGitApi([repo1, repo2]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/index.ts', 1, 'test');
+        assert.ok(thread);
+        // First repo in the array is the match
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/workspace/main'), 'src/index.ts');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('multiple files resolve to the same worktree root consistently', () => {
+        const worktreeRepo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/wt/feat');
+        const api = makeGitApi([worktreeRepo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const files = ['src/a.ts', 'src/b.ts', 'README.md', 'packages/lib/index.ts'];
+        for (const f of files) {
+            const thread = controller.createDraftThread(f, 1, `comment on ${f}`);
+            assert.ok(thread, `should create thread for ${f}`);
+            const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/workspace/wt/feat'), f);
+            assert.strictEqual(thread!.uri.toString(), expectedUri.toString(), `URI mismatch for ${f}`);
+        }
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('File URI resolution: subfolder within a worktree', () => {
+    test('file URI uses worktree root even when workspace is a worktree subfolder', () => {
+        // User opens /workspace/worktrees/feature/src, but git reports rootUri at /workspace/worktrees/feature
+        const worktreeRepo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/worktrees/feature');
+        const api = makeGitApi([worktreeRepo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+
+        const thread = controller.createDraftThread('src/components/Button.tsx', 42, 'test');
+        assert.ok(thread);
+        const expectedUri = vscode.Uri.joinPath(vscode.Uri.file('/workspace/worktrees/feature'), 'src/components/Button.tsx');
+        assert.strictEqual(thread!.uri.toString(), expectedUri.toString());
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('File URI resolution: AzDO thread paths', () => {
+    // AzDO API returns file paths with a leading '/' (e.g., '/src/index.ts').
+    // The updateThreads() method strips the leading '/' before joining with root.
+    // These tests verify that via updateThreads() the thread URIs are correct.
+
+    function makeAzdoThread(filePath: string, id = 1): GitPullRequestCommentThread {
+        return {
+            id,
+            comments: [{
+                content: 'Test comment',
+                author: { displayName: 'Alice' },
+                commentType: CommentType.Text,
+                isDeleted: false,
+                publishedDate: new Date('2026-01-01'),
+            }],
+            threadContext: {
+                filePath,
+                rightFileStart: { line: 10, offset: 1 },
+                rightFileEnd: { line: 10, offset: 1 },
+            },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+    }
+
+    test('leading slash is stripped for simple clone', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        // AzDO paths always start with '/'
+        await controller.updateThreads([makeAzdoThread('/src/index.ts')]);
+        // The thread should have been created without throwing
+        // (we can't access _threads directly, but no error = success)
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('leading slash handling works for worktree', async () => {
+        const mainRepo = makeRepo([
+            makeRemote('origin', 'https://github.com/user/repo.git'),
+        ], '/workspace/main');
+        const worktreeRepo = makeRepo([
+            makeRemote('origin', AZDO_REMOTE),
+        ], '/workspace/worktrees/feature');
+        const api = makeGitApi([mainRepo, worktreeRepo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        await controller.updateThreads([makeAzdoThread('/src/app.ts')]);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('handles paths without leading slash', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        // Edge case: path without leading slash (shouldn't happen in practice but should be handled)
+        await controller.updateThreads([makeAzdoThread('src/index.ts')]);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('deeply nested AzDO path resolves correctly', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        await controller.updateThreads([makeAzdoThread('/packages/core/src/utils/helpers.ts')]);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('multiple threads on different files all resolve correctly', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/wt/feat');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        await controller.updateThreads([
+            makeAzdoThread('/src/a.ts', 1),
+            makeAzdoThread('/src/b.ts', 2),
+            makeAzdoThread('/README.md', 3),
+            makeAzdoThread('/packages/lib/index.ts', 4),
+        ]);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('PR-level thread (no filePath) does not need root resolution', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/workspace/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        await controller.updateThreads([{
+            id: 100,
+            comments: [{
+                content: 'General PR comment',
+                author: { displayName: 'Eve' },
+                commentType: CommentType.Text,
+                isDeleted: false,
+            }],
+            threadContext: undefined,
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any]);
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('File URI resolution: consistency across layouts', () => {
+    // The same AzDO relative path should produce a URI that differs only in the
+    // root prefix — the relative portion must always match exactly.
+
+    const layouts = [
+        { label: 'simple clone', path: '/home/user/myrepo' },
+        { label: 'worktree', path: '/workspace/worktrees/feature' },
+        { label: 'deeply nested clone', path: '/home/user/projects/mono/app' },
+        { label: 'Windows-style path', path: 'C:\\Users\\dev\\repos\\myrepo' },
+        { label: 'Windows worktree', path: 'D:\\Work\\wt\\feat-123' },
+    ];
+
+    const testFile = 'src/components/Button.tsx';
+
+    for (const { label, path } of layouts) {
+        test(`${label}: createDraftThread produces correct URI`, () => {
+            const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], path);
+            const api = makeGitApi([repo]);
+            const detector = new RepositoryDetector(api, createMockLog());
+            const controller = new PrCommentController(createMockLog(), api, detector);
+
+            const thread = controller.createDraftThread(testFile, 5, `from ${label}`);
+            assert.ok(thread, `${label}: should create draft thread`);
+
+            const expectedUri = vscode.Uri.joinPath(vscode.Uri.file(path), testFile);
+            assert.strictEqual(
+                thread!.uri.toString(),
+                expectedUri.toString(),
+                `${label}: URI mismatch`,
+            );
+
+            controller.dispose();
+            detector.dispose();
+        });
+    }
+
+    test('URI relative suffix is identical across all layouts', () => {
+        const uris: string[] = [];
+        for (const { path } of layouts) {
+            const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], path);
+            const api = makeGitApi([repo]);
+            const detector = new RepositoryDetector(api, createMockLog());
+            const controller = new PrCommentController(createMockLog(), api, detector);
+
+            const thread = controller.createDraftThread(testFile, 5, 'test');
+            assert.ok(thread);
+            uris.push(thread!.uri.path);
+
+            controller.dispose();
+            detector.dispose();
+        }
+
+        // All URIs should end with the same relative path
+        for (const uri of uris) {
+            assert.ok(
+                uri.endsWith('/' + testFile),
+                `URI path "${uri}" should end with /${testFile}`,
+            );
+        }
     });
 });

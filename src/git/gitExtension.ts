@@ -1,6 +1,17 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
-import type { API, GitExtension } from '../typings/git';
+import type { API, GitExtension, Repository } from '../typings/git';
+
+import type { RepositoryDetector } from '../azdo/repositoryDetector';
+
+/**
+ * Resolve the correct git Repository for operations.
+ * Uses the repository matched by the detector (worktree-safe), falling back
+ * to the first repository known to the Git extension.
+ */
+export function getActiveRepository(gitApi: API | undefined, detector: RepositoryDetector): Repository | undefined {
+    return detector.currentRepository ?? gitApi?.repositories[0];
+}
 
 /**
  * Acquire the VS Code built-in Git extension API.

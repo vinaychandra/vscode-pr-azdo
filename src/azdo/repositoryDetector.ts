@@ -19,6 +19,11 @@ export class RepositoryDetector implements vscode.Disposable {
         return this._currentRemoteInfo;
     }
 
+    /** The VS Code Git Repository that contains the detected AzDo remote. */
+    get currentRepository(): import('../typings/git').Repository | undefined {
+        return this._currentRemoteInfo?.repository;
+    }
+
     constructor(private readonly gitApi: API, private readonly log: vscode.OutputChannel) {
         this.log.appendLine(`[detector] Initialising. Repositories known to git extension: ${gitApi.repositories.length}`);
 
@@ -93,10 +98,10 @@ export class RepositoryDetector implements vscode.Disposable {
                 this.log.appendLine(`[detector]     → skipped (no URL)`);
                 continue;
             }
-            const info = parseAzDoRemote(url, remote.name);
-            if (info) {
-                this.log.appendLine(`[detector]     → MATCH: ${info.organization}/${info.project}/${info.repositoryName}`);
-                return info;
+            const parsed = parseAzDoRemote(url, remote.name);
+            if (parsed) {
+                this.log.appendLine(`[detector]     → MATCH: ${parsed.organization}/${parsed.project}/${parsed.repositoryName}`);
+                return { ...parsed, repository: repo };
             } else {
                 this.log.appendLine(`[detector]     → not an AzDO remote`);
             }

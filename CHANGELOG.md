@@ -6,6 +6,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Git worktree support** — checkout, comments, diffs, and AI review now target the correct worktree directory instead of always using the first repository. The extension detects which repository contains the Azure DevOps remote and uses that for all operations.
+
 ### Added
 
 - **Multi-tenant authentication support** — when your Microsoft account belongs to multiple Entra tenants, the extension now automatically discovers the correct tenant for the Azure DevOps organization and re-authenticates with a tenant-specific token. Previously the extension would silently use a cached session for the wrong tenant, causing `TF400813` authorization errors.

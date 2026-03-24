@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { escapeHtml, voteLabel, prStatusLabel, mergeStatusLabel, buildPrWebUrl, buildCreatePrUrl, buildHtml } from '../../views/prDetailPanel';
 import { PullRequestStatus, PullRequestAsyncStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import type { AzDoRemoteInfo } from '../../azdo/remoteInfo';
+import type { ParsedAzDoRemote } from '../../azdo/remoteInfo';
 
 suite('escapeHtml', () => {
     test('escapes ampersands', () => {
@@ -112,7 +112,7 @@ suite('mergeStatusLabel', () => {
 });
 
 suite('buildPrWebUrl', () => {
-    const remoteInfo: AzDoRemoteInfo = {
+    const remoteInfo: ParsedAzDoRemote = {
         organization: 'myorg',
         project: 'myproject',
         repositoryName: 'myrepo',
@@ -129,7 +129,7 @@ suite('buildPrWebUrl', () => {
     });
 
     test('encodes special characters in org/project/repo', () => {
-        const info: AzDoRemoteInfo = {
+        const info: ParsedAzDoRemote = {
             ...remoteInfo,
             organization: 'my org',
             project: 'my project',
@@ -143,7 +143,7 @@ suite('buildPrWebUrl', () => {
 });
 
 suite('buildCreatePrUrl', () => {
-    const remoteInfo: AzDoRemoteInfo = {
+    const remoteInfo: ParsedAzDoRemote = {
         organization: 'myorg',
         project: 'myproject',
         repositoryName: 'myrepo',
@@ -167,7 +167,7 @@ suite('buildCreatePrUrl', () => {
     });
 
     test('encodes special characters in org/project/repo', () => {
-        const info: AzDoRemoteInfo = {
+        const info: ParsedAzDoRemote = {
             ...remoteInfo,
             organization: 'my org',
             project: 'my project',
@@ -187,7 +187,7 @@ suite('buildCreatePrUrl', () => {
 });
 
 suite('buildHtml', () => {
-    const remoteInfo: AzDoRemoteInfo = {
+    const remoteInfo: ParsedAzDoRemote = {
         organization: 'myorg',
         project: 'myproject',
         repositoryName: 'myrepo',

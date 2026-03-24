@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote } from './git/gitExtension';
+import { getGitAPI, getActiveRepository, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient, TenantMismatchError } from './azdo/apiClient';
@@ -113,13 +113,13 @@ export async function activate(context: vscode.ExtensionContext) {
 	let activePrTreeView: vscode.TreeView<ActivePrTreeItem> | undefined;
 
 	// Inline comment controller — lives for the extension's lifetime
-	const commentController = new PrCommentController(outputChannel, gitApi);
+	const commentController = new PrCommentController(outputChannel, gitApi, detector);
 	context.subscriptions.push(commentController);
 
 	// --- AI Chat Participant & Context Provider ---
 	const prContextProvider = new PrContextProvider();
-	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi);
-	registerPrTools(context, prContextProvider, outputChannel, gitApi);
+	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi, detector);
+	registerPrTools(context, prContextProvider, outputChannel, gitApi, detector);
 
 	// --- Review Mode ---
 	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
@@ -202,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Git ref content provider for diff views
-	const gitContentProvider = new GitRefContentProvider(outputChannel, gitApi);
+	const gitContentProvider = new GitRefContentProvider(outputChannel, gitApi, detector);
 	context.subscriptions.push(
 		vscode.workspace.registerTextDocumentContentProvider(GIT_CONTENT_SCHEME, gitContentProvider),
 	);
@@ -494,7 +494,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Navigate to a comment in the file
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
-			const repoRoot = gitApi?.repositories[0]?.rootUri;
+			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
 			if (!repoRoot) { return; }
 			const fileUri = vscode.Uri.joinPath(repoRoot, filePath);
 			const doc = await vscode.workspace.openTextDocument(fileUri);
@@ -838,7 +838,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
 			outputChannel.appendLine('[ai] reviewWithAI: detecting git state…');
-			const repo = gitApi?.repositories[0];
+			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				outputChannel.appendLine('[ai] reviewWithAI: no git repo found');
 				await vscode.commands.executeCommand('workbench.action.chat.open', {
@@ -1208,7 +1208,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
 			const targetRef = `origin/${targetBranch}`;
-			const repoRoot = gitApi?.repositories[0]?.rootUri;
+			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
 			if (!repoRoot) { return; }
 
 			const filePath = item.filePath;
@@ -1251,7 +1251,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 			const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
-			const repo = gitApi?.repositories[0];
+			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				vscode.window.showWarningMessage('No git repository found.');
 				return;
@@ -1350,7 +1350,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 			const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
-			const repo = gitApi?.repositories[0];
+			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				vscode.window.showWarningMessage('No git repository found.');
 				return;
@@ -1420,7 +1420,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('Not connected to Azure DevOps. Please sign in first.');
 				return;
 			}
-			const repo = gitApi?.repositories[0];
+			const repo = getActiveRepository(gitApi, detector);
 			const currentBranch = repo?.state.HEAD?.name;
 			if (!repo || !currentBranch) {
 				outputChannel.appendLine(`[create-pr] ABORT: No branch checked out (HEAD=${repo?.state.HEAD?.name ?? 'undefined'})`);
@@ -1682,7 +1682,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- Standalone AI Review (no active PR needed) ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.standaloneReview', async () => {
-			const repo = gitApi?.repositories[0];
+			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				vscode.window.showWarningMessage('No git repository found.');
 				return;
