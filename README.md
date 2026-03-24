@@ -90,14 +90,18 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 
 The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in Microsoft authentication provider. Sign in via the Command Palette or the welcome view prompt.
 
+**Multi-tenant accounts:** If your Microsoft account belongs to multiple Entra tenants, the extension automatically discovers the correct tenant for the Azure DevOps organization and re-authenticates. If automatic discovery fails, use the "Switch Account / Tenant" command from the Command Palette to force a fresh login.
+
 ## Extension Commands
 
-| Command                                  | Description                                          |
-| ---------------------------------------- | ---------------------------------------------------- |
-| `Azure DevOps PR: Sign In`               | Authenticate with Azure DevOps                       |
-| `Azure DevOps PR: Show Detection Status` | Show detected org/project/repo                       |
-| `Azure DevOps PR: Verify API Connection` | Test API connectivity and list active PRs            |
-| `Toggle Review Mode`                     | Show/hide comments and gutter icons                  |
+| Command                                        | Description                                          |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| `Azure DevOps PR: Sign In`                     | Authenticate with Azure DevOps                       |
+| `Azure DevOps PR: Switch Account / Tenant`     | Force re-authentication (multi-tenant scenarios)     |
+| `Azure DevOps PR: Clear Auth Cache`            | Clear cached tenant mappings and reset connection    |
+| `Azure DevOps PR: Show Detection Status`       | Show detected org/project/repo                       |
+| `Azure DevOps PR: Verify API Connection`       | Test API connectivity and list active PRs            |
+| `Toggle Review Mode`                           | Show/hide comments and gutter icons                  |
 | `Filter Comments`                        | Switch between Active and All comment threads        |
 | `Refresh`                                | Re-fetch PR list or active PR data                   |
 | `Checkout Branch`                        | Fetch and checkout a PR's source branch              |

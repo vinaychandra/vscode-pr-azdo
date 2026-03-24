@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { getGitAPI, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
-import { AzDoApiClient } from './azdo/apiClient';
+import { AzDoApiClient, TenantMismatchError } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
 import { PrTreeDataProvider, type PrTreeItem } from './views/prTreeDataProvider';
 import { PullRequestTreeItem } from './views/prTreeItems';
@@ -87,6 +87,20 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- Auth & API ---
 	const authProvider = new EntraIdAuthProvider(outputChannel);
 	context.subscriptions.push(authProvider);
+
+	// Tenant cache — maps AzDO org name → Entra tenant ID (persisted across sessions)
+	const TENANT_CACHE_KEY = 'azdo-tenant-cache';
+	const tenantCache = {
+		get(org: string): string | undefined {
+			const map = context.globalState.get<Record<string, string>>(TENANT_CACHE_KEY);
+			return map?.[org];
+		},
+		set(org: string, tenantId: string): void {
+			const map = context.globalState.get<Record<string, string>>(TENANT_CACHE_KEY) ?? {};
+			map[org] = tenantId;
+			void context.globalState.update(TENANT_CACHE_KEY, map);
+		},
+	};
 
 	let apiClient: AzDoApiClient | undefined;
 	let prService: PullRequestService | undefined;
@@ -239,12 +253,30 @@ export async function activate(context: vscode.ExtensionContext) {
 		const info = detector.currentRemoteInfo;
 		if (info) {
 			outputChannel.appendLine(`[ext] Building API client for ${info.organization}/${info.project}/${info.repositoryName}`);
-			apiClient = new AzDoApiClient(authProvider, info, outputChannel);
+			apiClient = new AzDoApiClient(authProvider, info, outputChannel, tenantCache);
 			context.subscriptions.push(apiClient);
 
 			// Fetch user ID early — needed to identify own comments for delete button.
 			// Don't await here to avoid blocking tree view setup; wire up comments after it resolves.
-			const userIdPromise = apiClient.getCurrentUserId().catch(() => undefined);
+			// On TenantMismatchError, show an actionable notification.
+			const userIdPromise = apiClient.getCurrentUserId().catch(err => {
+				if (err instanceof TenantMismatchError) {
+					outputChannel.appendLine(`[ext] Tenant mismatch: ${err.message}`);
+					void vscode.window.showErrorMessage(
+						`Authentication failed for Azure DevOps organization "${err.organization}". ` +
+						(err.discoveredTenantId
+							? `The organization requires tenant ${err.discoveredTenantId}, but your current session doesn't have access. `
+							: 'Your current session may be for the wrong Entra tenant. ') +
+						'This is common with multi-tenant Microsoft accounts.',
+						'Switch Account',
+					).then(action => {
+						if (action === 'Switch Account') {
+							void vscode.commands.executeCommand('vscode-pr-azdo.switchAccount');
+						}
+					});
+				}
+				return undefined;
+			});
 
 			prService = new PullRequestService(apiClient, info);
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel);
@@ -1726,6 +1758,38 @@ export async function activate(context: vscode.ExtensionContext) {
 			} else {
 				vscode.window.showWarningMessage('Azure DevOps PR: Sign-in was cancelled or failed.');
 			}
+		}),
+	);
+
+	// Switch Account command — forces re-authentication (clears session preference, prompts fresh login)
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.switchAccount', async () => {
+			outputChannel.appendLine('[ext] switchAccount: forcing new session…');
+			apiClient?.resetConnection();
+			const token = await authProvider.getToken({ forceNew: true });
+			if (token) {
+				void vscode.commands.executeCommand(
+					'setContext', 'vscode-pr-azdo:isAuthenticated', true,
+				);
+				vscode.window.showInformationMessage('Azure DevOps PR: Switched account successfully.');
+				outputChannel.appendLine('[ext] switchAccount succeeded — rebuilding API client');
+				rebuildApiClient();
+			} else {
+				vscode.window.showWarningMessage('Azure DevOps PR: Account switch was cancelled or failed.');
+			}
+		}),
+	);
+
+	// Clear all auth caches — useful for testing multi-tenant flows
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.clearAuthCache', async () => {
+			await context.globalState.update(TENANT_CACHE_KEY, undefined);
+			apiClient?.resetConnection();
+			outputChannel.appendLine('[ext] Cleared tenant cache and reset connection — rebuilding.');
+			rebuildApiClient();
+			vscode.window.showInformationMessage(
+				'Azure DevOps PR: Auth caches cleared. Use "Switch Account" or sign in again to re-authenticate.',
+			);
 		}),
 	);
 

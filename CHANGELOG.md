@@ -6,6 +6,16 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-tenant authentication support** — when your Microsoft account belongs to multiple Entra tenants, the extension now automatically discovers the correct tenant for the Azure DevOps organization and re-authenticates with a tenant-specific token. Previously the extension would silently use a cached session for the wrong tenant, causing `TF400813` authorization errors.
+- **Automatic tenant discovery** — on auth failure, the extension queries the AzDO org's `_apis/connectionData` and `_apis/projects` endpoints to extract the org's tenant ID from response headers (`X-VSS-ResourceTenant`, `WWW-Authenticate`)
+- **Tenant cache** — discovered org-to-tenant mappings are persisted in global state so subsequent connections skip the discovery step
+- **Switch Account command** — new "Azure DevOps PR: Switch Account / Tenant" command forces a fresh login with `forceNewSession` + `clearSessionPreference`, useful when the wrong tenant is cached
+- **Clear Auth Cache command** — new "Azure DevOps PR: Clear Auth Cache" command wipes the tenant cache and resets the API connection for testing or troubleshooting
+- **Actionable error notifications** — tenant mismatch errors now show a notification with a "Switch Account" button instead of failing silently
+- **Connection mutex** — concurrent API callers share a single in-flight connection attempt instead of each triggering separate discovery flows
+
 ## [0.0.7]
 
 ### Added

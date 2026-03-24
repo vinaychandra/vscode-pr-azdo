@@ -85,6 +85,14 @@
         "title": "Azure DevOps PR: Sign In"
       },
       {
+        "command": "vscode-pr-azdo.switchAccount",
+        "title": "Azure DevOps PR: Switch Account / Tenant"
+      },
+      {
+        "command": "vscode-pr-azdo.clearAuthCache",
+        "title": "Azure DevOps PR: Clear Auth Cache"
+      },
+      {
         "command": "vscode-pr-azdo.verifyApi",
         "title": "Azure DevOps PR: Verify API Connection"
       },
