@@ -123,6 +123,16 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Release Notes
 
+### 0.0.8
+
+- **Git worktree support** — checkout, comments, diffs, and AI review now target the correct worktree directory instead of always using the first repository
+- **Multi-tenant authentication** — automatic Entra tenant discovery and re-authentication when your account belongs to multiple tenants; eliminates `TF400813` authorization errors
+- **Tenant cache** — discovered org-to-tenant mappings are persisted so subsequent connections skip discovery
+- **Switch Account command** — force a fresh login when the wrong tenant is cached
+- **Clear Auth Cache command** — wipe the tenant cache and reset the API connection
+- **Actionable error notifications** — tenant mismatch errors show a "Switch Account" button instead of failing silently
+- **Connection mutex** — concurrent API callers share a single in-flight connection attempt
+
 ### 0.0.7
 
 - **Tool limit** — tools sent to the LM are capped at 128 with a warning if any are dropped

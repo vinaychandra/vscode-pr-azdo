@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.8]
+
 ### Fixed
 
 - **Git worktree support** — checkout, comments, diffs, and AI review now target the correct worktree directory instead of always using the first repository. The extension detects which repository contains the Azure DevOps remote and uses that for all operations.
