@@ -533,3 +533,79 @@ suite('ActivePrTreeDataProvider — filteredThreads with author filter', () => {
         provider.dispose();
     });
 });
+
+suite('ActivePrTreeDataProvider — refreshThreadsOnly', () => {
+    test('re-fetches threads without clearing file/commit caches', async () => {
+        let threadFetchCount = 0;
+        let iterationFetchCount = 0;
+        const pr: GitPullRequest = {
+            pullRequestId: 42,
+            title: 'Test PR',
+            createdBy: { displayName: 'Owner', id: 'owner-id' },
+            sourceRefName: 'refs/heads/feature',
+            targetRefName: 'refs/heads/main',
+            status: 1,
+        } as any;
+
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => pr,
+                getPrIterations: async () => { iterationFetchCount++; return [{ id: 1 }] as any; },
+                getPrIterationChanges: async () => ({ changeEntries: [] }),
+                getPrCommits: async () => [],
+                getPrThreads: async () => {
+                    threadFetchCount++;
+                    return [makeThread({ id: 1 })];
+                },
+            }),
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+
+        // Initial load
+        await provider.detectActivePr();
+        const roots = await provider.getChildren();
+        const prRoot = roots.find(r => r instanceof ActivePrRootItem);
+        if (prRoot) { await provider.getChildren(prRoot); }
+
+        assert.strictEqual(threadFetchCount, 1);
+        assert.strictEqual(iterationFetchCount, 1);
+
+        // refreshThreadsOnly should re-fetch threads but NOT iterations/files/commits
+        await provider.refreshThreadsOnly();
+
+        assert.strictEqual(threadFetchCount, 2, 'threads should be re-fetched');
+        assert.strictEqual(iterationFetchCount, 1, 'iterations should NOT be re-fetched');
+
+        provider.dispose();
+    });
+
+    test('fires onDidChangeTreeData and onDidUpdateComments', async () => {
+        let treeChanged = 0;
+        let commentsUpdated = 0;
+
+        const provider = await createProviderWithThreads([makeThread({ id: 1 })]);
+        provider.onDidChangeTreeData(() => { treeChanged++; });
+        provider.onDidUpdateComments(() => { commentsUpdated++; });
+
+        await provider.refreshThreadsOnly();
+
+        assert.ok(treeChanged >= 1, 'onDidChangeTreeData should fire');
+        assert.ok(commentsUpdated >= 1, 'onDidUpdateComments should fire');
+
+        provider.dispose();
+    });
+
+    test('is a no-op when no active PR', async () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+
+        // Should not throw
+        await provider.refreshThreadsOnly();
+
+        provider.dispose();
+    });
+});

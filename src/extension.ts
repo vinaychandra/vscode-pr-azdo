@@ -1093,10 +1093,10 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
-	// Refresh comment controller when a comment action is performed
+	// Refresh comment threads when a comment action is performed (incremental — no full data reload)
 	context.subscriptions.push(
 		commentController.onDidPerformAction(() => {
-			activePrProvider?.refresh();
+			void activePrProvider?.refreshThreadsOnly();
 		}),
 	);
 

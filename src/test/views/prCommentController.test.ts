@@ -94,6 +94,38 @@ suite('PrCommentController', () => {
         controller.dispose();
     });
 
+    test('incremental updateThreads reuses PR-level thread objects', async () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.setReviewMode(true);
+
+        const prThread: GitPullRequestCommentThread = {
+            id: 50,
+            comments: [{ content: 'PR comment', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: undefined,
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([prThread]);
+        const vsThread = controller.findThreadByAzdoId(50);
+        assert.ok(vsThread, 'PR-level thread should exist');
+
+        // Update with same thread (e.g., new reply added)
+        const prThreadUpdated = {
+            ...prThread,
+            comments: [
+                ...prThread.comments!,
+                { content: 'Reply to PR', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() },
+            ],
+        } as any;
+
+        await controller.updateThreads([prThreadUpdated]);
+        const vsThreadAfter = controller.findThreadByAzdoId(50);
+        assert.strictEqual(vsThreadAfter, vsThread, 'PR-level thread should be reused');
+
+        controller.dispose();
+    });
+
     // --- Review Mode ---
 
     test('reviewMode defaults to false', () => {
@@ -453,6 +485,120 @@ function makeGitApi(repos: Repository[]): API {
 }
 
 const AZDO_REMOTE = 'https://dev.azure.com/myorg/myproject/_git/myrepo';
+
+// ---------------------------------------------------------------------------
+// Incremental updateThreads — thread reuse & disposal
+// ---------------------------------------------------------------------------
+
+suite('Incremental updateThreads', () => {
+    test('reuses existing file-level thread objects by AzDO id', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        const thread1: GitPullRequestCommentThread = {
+            id: 10,
+            comments: [{ content: 'First', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: { filePath: '/src/index.ts', rightFileStart: { line: 5, offset: 1 }, rightFileEnd: { line: 5, offset: 1 } },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([thread1]);
+        const vsThread1 = controller.findThreadByAzdoId(10);
+        assert.ok(vsThread1, 'thread should exist after first updateThreads');
+
+        // Second call with same AzDO thread id but updated content
+        const thread1Updated: GitPullRequestCommentThread = {
+            ...thread1,
+            comments: [
+                ...thread1.comments!,
+                { content: 'Reply', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() },
+            ],
+        } as any;
+
+        await controller.updateThreads([thread1Updated]);
+        const vsThread1After = controller.findThreadByAzdoId(10);
+        assert.ok(vsThread1After, 'thread should still exist after second updateThreads');
+        assert.strictEqual(vsThread1After, vsThread1, 'same VS Code thread object should be reused (preserves collapse state)');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('disposes threads removed from the new set', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        const threadA: GitPullRequestCommentThread = {
+            id: 20,
+            comments: [{ content: 'A', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: { filePath: '/src/a.ts', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 1 } },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+        const threadB: GitPullRequestCommentThread = {
+            id: 21,
+            comments: [{ content: 'B', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: { filePath: '/src/b.ts', rightFileStart: { line: 2, offset: 1 }, rightFileEnd: { line: 2, offset: 1 } },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([threadA, threadB]);
+        assert.ok(controller.findThreadByAzdoId(20), 'thread A should exist');
+        assert.ok(controller.findThreadByAzdoId(21), 'thread B should exist');
+
+        // Remove thread B, keep thread A
+        await controller.updateThreads([threadA]);
+        assert.ok(controller.findThreadByAzdoId(20), 'thread A should still exist');
+        assert.strictEqual(controller.findThreadByAzdoId(21), undefined, 'thread B should be disposed');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('creates new threads not present in previous set', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        const threadA: GitPullRequestCommentThread = {
+            id: 30,
+            comments: [{ content: 'A', author: { displayName: 'Alice' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: { filePath: '/src/a.ts', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 1 } },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([threadA]);
+        const vsThreadA = controller.findThreadByAzdoId(30);
+        assert.ok(vsThreadA, 'thread A should exist');
+
+        // Add thread B alongside thread A
+        const threadB: GitPullRequestCommentThread = {
+            id: 31,
+            comments: [{ content: 'B', author: { displayName: 'Bob' }, commentType: CommentType.Text, isDeleted: false, publishedDate: new Date() }],
+            threadContext: { filePath: '/src/b.ts', rightFileStart: { line: 2, offset: 1 }, rightFileEnd: { line: 2, offset: 1 } },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([threadA, threadB]);
+        assert.strictEqual(controller.findThreadByAzdoId(30), vsThreadA, 'thread A should be reused');
+        assert.ok(controller.findThreadByAzdoId(31), 'thread B should be created');
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
 
 // ---------------------------------------------------------------------------
 // File URI resolution across workspace layouts

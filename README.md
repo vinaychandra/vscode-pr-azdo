@@ -29,6 +29,7 @@ When you're on a branch with an open PR, the extension automatically detects it 
 - **Reply** to existing threads directly from the editor
 - **New comments** — click the `+` gutter icon on any PR file to start a new thread
 - **Thread status** — Resolve, Won't Fix, Close, or Reactivate threads from inline buttons
+- **Non-disruptive updates** — posting a comment or reply updates threads incrementally without resetting collapsed/expanded state
 
 ### Review Mode
 

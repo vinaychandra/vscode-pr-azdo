@@ -263,6 +263,21 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         void this.detectActivePr();
     }
 
+    /**
+     * Re-fetch only comment threads without clearing file/commit/iteration caches.
+     * Use after a comment action to avoid a full data reload that causes UI flicker.
+     */
+    async refreshThreadsOnly(): Promise<void> {
+        const prId = this._activePr?.pullRequestId;
+        if (!prId) { return; }
+
+        this._allThreads = undefined; // clear so loadThreads re-fetches
+        await this.loadThreads(prId);
+        this.rebuildCommentsFromCache();
+        this._onDidChangeTreeData.fire();
+        this._onDidUpdateComments.fire();
+    }
+
     private setActivePr(pr: GitPullRequest | undefined): void {
         const changed = pr?.pullRequestId !== this._activePr?.pullRequestId;
         this._activePr = pr;

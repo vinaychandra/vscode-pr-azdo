@@ -457,31 +457,48 @@ export class PrCommentController implements vscode.Disposable {
      * Update the displayed comments from a set of AzDO threads.
      * Call this whenever the active PR changes, data is refreshed,
      * or the comment filter changes.
+     *
+     * Performs an incremental diff: existing threads whose AzDO id is still
+     * present are updated in-place (preserving collapsed/expanded state),
+     * removed threads are disposed, and new threads are created.
      */
     async updateThreads(threads: GitPullRequestCommentThread[] | undefined): Promise<void> {
         // Cache the threads so we can re-apply when review mode toggles
         this._lastThreads = threads;
 
-        // Dispose previous VS Code comment threads
-        this.disposeThreads();
-
         if (!this._reviewMode) {
+            this.disposeThreads();
             this.log.appendLine('[comments] Review mode OFF — not displaying threads');
             return;
         }
 
         if (!threads || threads.length === 0) {
+            this.disposeThreads();
             this.log.appendLine('[comments] No threads to display');
             return;
         }
 
         const root = this._workspaceRoot;
         if (!root) {
+            this.disposeThreads();
             this.log.appendLine('[comments] No workspace root — cannot resolve file paths');
             return;
         }
 
+        // Build a lookup of existing VS Code threads by their AzDO thread id
+        const existingById = new Map<number, vscode.CommentThread>();
+        for (const [vsThread, meta] of this._threadMetaMap) {
+            existingById.set(meta.id, vsThread);
+        }
+
+        // Track which existing threads are still present in the new set
+        const survivingIds = new Set<number>();
+
+        const newThreads: vscode.CommentThread[] = [];
+        const newMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
+
         let created = 0;
+        let updated = 0;
         let prLevelLine = 0; // Line counter for PR-level comments on the virtual doc
         const prLevelUri = vscode.Uri.parse(`${PR_COMMENTS_SCHEME}:///PR-Comments`);
 
@@ -501,19 +518,32 @@ export class PrCommentController implements vscode.Disposable {
                     } as vscode.Comment));
                 if (comments.length === 0) { continue; }
 
-                const thread = this._controller.createCommentThread(prLevelUri, range, comments);
-                thread.canReply = !!this._prService;
-                thread.label = this.getThreadLabel(azdoThread);
-                thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-                thread.contextValue = 'azdoPrThread';
-                if (azdoThread.id) {
-                    this._threadMetaMap.set(thread, { id: azdoThread.id, azdoThread });
+                // Check if we can reuse an existing thread
+                const existingThread = azdoThread.id ? existingById.get(azdoThread.id) : undefined;
+                if (existingThread && azdoThread.id) {
+                    survivingIds.add(azdoThread.id);
+                    existingThread.comments = comments;
+                    existingThread.canReply = !!this._prService;
+                    existingThread.label = this.getThreadLabel(azdoThread);
+                    // Preserve collapsibleState — don't reset it
+                    newMetaMap.set(existingThread, { id: azdoThread.id, azdoThread });
+                    newThreads.push(existingThread);
+                    updated++;
+                } else {
+                    const thread = this._controller.createCommentThread(prLevelUri, range, comments);
+                    thread.canReply = !!this._prService;
+                    thread.label = this.getThreadLabel(azdoThread);
+                    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+                    thread.contextValue = 'azdoPrThread';
+                    if (azdoThread.id) {
+                        newMetaMap.set(thread, { id: azdoThread.id, azdoThread });
+                    }
+                    newThreads.push(thread);
+                    // Re-assign to force VS Code to evaluate comment contextValues for menu buttons
+                    thread.comments = [...thread.comments];
+                    created++;
                 }
-                this._threads.push(thread);
-                // Re-assign to force VS Code to evaluate comment contextValues for menu buttons
-                thread.comments = [...thread.comments];
                 prLevelLine += comments.length + 2; // Space between threads
-                created++;
                 continue;
             }
 
@@ -521,10 +551,33 @@ export class PrCommentController implements vscode.Disposable {
             const relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
             const fileUri = vscode.Uri.joinPath(root, relativePath);
 
-            this.log.appendLine(`[comments] Creating thread for ${relativePath} at ${fileUri.toString()}`);
-
             // Determine line range from thread context
             const range = this.getRange(azdoThread);
+
+            // Check if we can reuse an existing thread
+            const existingThread = azdoThread.id ? existingById.get(azdoThread.id) : undefined;
+            if (existingThread && azdoThread.id) {
+                survivingIds.add(azdoThread.id);
+
+                // Update comments in-place — rebuild them for suggestion rendering
+                const comments = await this.buildComments(azdoThread, fileUri, range);
+                if (comments.length === 0) {
+                    // Thread has no visible comments anymore — dispose it
+                    existingThread.dispose();
+                    continue;
+                }
+                existingThread.comments = comments;
+                existingThread.canReply = !!this._prService;
+                existingThread.label = this.getThreadLabel(azdoThread);
+                // Preserve collapsibleState — don't reset it
+                existingThread.contextValue = 'azdoPrThread';
+                newMetaMap.set(existingThread, { id: azdoThread.id, azdoThread });
+                newThreads.push(existingThread);
+                updated++;
+                continue;
+            }
+
+            this.log.appendLine(`[comments] Creating thread for ${relativePath} at ${fileUri.toString()}`);
             this.log.appendLine(`[comments]   range: L${range.start.line + 1}:${range.start.character + 1} - L${range.end.line + 1}:${range.end.character + 1}`);
 
             // Build comment objects from the thread's comments
@@ -541,16 +594,28 @@ export class PrCommentController implements vscode.Disposable {
 
             // Map this VS Code thread to its AzDO metadata for API calls
             if (azdoThread.id) {
-                this._threadMetaMap.set(thread, { id: azdoThread.id, azdoThread });
+                newMetaMap.set(thread, { id: azdoThread.id, azdoThread });
             }
 
-            this._threads.push(thread);
+            newThreads.push(thread);
             // Re-assign to force VS Code to evaluate comment contextValues for menu buttons
             thread.comments = [...thread.comments];
             created++;
         }
 
-        this.log.appendLine(`[comments] Created ${created} inline comment thread(s)`);
+        // Dispose threads that are no longer in the new set
+        let disposed = 0;
+        for (const [vsThread, meta] of this._threadMetaMap) {
+            if (!survivingIds.has(meta.id)) {
+                vsThread.dispose();
+                disposed++;
+            }
+        }
+
+        this._threads = newThreads;
+        this._threadMetaMap = newMetaMap;
+
+        this.log.appendLine(`[comments] Incremental update: ${created} created, ${updated} updated, ${disposed} disposed`);
     }
 
     private getRange(thread: GitPullRequestCommentThread): vscode.Range {
