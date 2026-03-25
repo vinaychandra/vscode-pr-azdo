@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.9]
+
 ### Fixed
 
 - **Comment threads no longer reset after posting** — submitting a new comment or reply no longer causes all comment threads to briefly disappear and re-expand. Existing threads are updated in-place, preserving collapsed/expanded state and reading context.
