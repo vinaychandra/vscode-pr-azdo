@@ -11,6 +11,7 @@ import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type A
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
+import { computeRelativePath, extractPathFromGitRefUri, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
@@ -479,6 +480,77 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
 			activePrProvider?.refresh();
 			gitContentProvider.clearCache();
+		}),
+	);
+
+	// --- Active-editor-in-PR context key ---
+	function updateActiveEditorInPrContext(): void {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor || !activePrProvider?._activePrForContext) {
+			void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:activeEditorInPr', false);
+			return;
+		}
+		const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
+		const inPr = isUriInChangedFiles(editor.document.uri, repoRoot, activePrProvider.changedFilePaths);
+		void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:activeEditorInPr', inPr);
+	}
+
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(() => updateActiveEditorInPrContext()),
+	);
+	// Also re-evaluate when PR data changes
+	context.subscriptions.push(
+		activePrProxyEmitter.event(() => updateActiveEditorInPrContext()),
+	);
+
+	// --- Toggle between file view and diff view ---
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.toggleFileDiff', async () => {
+			const pr = activePrProvider?._activePrForContext;
+			if (!pr) { return; }
+
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) { return; }
+
+			const uri = editor.document.uri;
+			const cursorLine = editor.selection.active.line;
+			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+			const targetRef = `origin/${targetBranch}`;
+			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
+			if (!repoRoot) { return; }
+
+			if (uri.scheme === 'file') {
+				// File → Diff: compute relative path, look up change type, open diff
+				const relative = computeRelativePath(uri, repoRoot);
+				if (!relative) { return; }
+
+				const changeType = activePrProvider?.getChangeType(relative) ?? VersionControlChangeType.Edit;
+				const diff = buildDiffParams(relative, changeType, repoRoot, targetRef, targetBranch);
+
+				outputChannel.appendLine(`[toggle] File → Diff for ${relative}`);
+				await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
+
+				// Scroll to same line
+				setTimeout(() => {
+					const e = vscode.window.activeTextEditor;
+					if (e) {
+						const pos = new vscode.Position(cursorLine, 0);
+						e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+					}
+				}, 300);
+			} else if (uri.scheme === GIT_CONTENT_SCHEME) {
+				// Diff → File: extract file path, open workspace file
+				const path = extractPathFromGitRefUri(uri);
+				if (!path) { return; }
+
+				outputChannel.appendLine(`[toggle] Diff → File for ${path}`);
+				const fileUri = vscode.Uri.joinPath(repoRoot, path);
+				const doc = await vscode.workspace.openTextDocument(fileUri);
+				const e = await vscode.window.showTextDocument(doc);
+				const pos = new vscode.Position(cursorLine, 0);
+				e.selection = new vscode.Selection(pos, pos);
+				e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+			}
 		}),
 	);
 
@@ -1230,28 +1302,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			outputChannel.appendLine(`[diff] Opening diff for ${filePath} (${item.description}) against ${targetRef}`);
 
-			let leftUri: vscode.Uri;
-			let rightUri: vscode.Uri;
-			let title: string;
-
-			if (changeType & VersionControlChangeType.Add) {
-				// New file: left is empty, right is working copy
-				leftUri = buildGitRefUri('__empty__', targetRef);
-				rightUri = vscode.Uri.joinPath(repoRoot, filePath);
-				title = `${item.fileName} (Added)`;
-			} else if (changeType & VersionControlChangeType.Delete) {
-				// Deleted file: left is target branch, right is empty
-				leftUri = buildGitRefUri(filePath, targetRef);
-				rightUri = buildGitRefUri('__empty__', targetRef);
-				title = `${item.fileName} (Deleted)`;
-			} else {
-				// Edit/Rename/etc: left is target branch, right is working copy
-				leftUri = buildGitRefUri(filePath, targetRef);
-				rightUri = vscode.Uri.joinPath(repoRoot, filePath);
-				title = `${item.fileName} (${targetBranch} ↔ Working Copy)`;
-			}
-
-			await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title);
+			const diff = buildDiffParams(filePath, changeType, repoRoot, targetRef, targetBranch);
+			await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
 		}),
 	);
 

@@ -229,9 +229,26 @@
         "command": "vscode-pr-azdo.standaloneReview",
         "title": "Perform AI Review",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "vscode-pr-azdo.toggleFileDiff",
+        "title": "Toggle File / Diff View",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "vscode-pr-azdo.toggleFileDiff",
+          "when": "vscode-pr-azdo:hasActivePr && vscode-pr-azdo:activeEditorInPr && !isInDiffEditor && resourceScheme == file",
+          "group": "navigation@10"
+        },
+        {
+          "command": "vscode-pr-azdo.toggleFileDiff",
+          "when": "vscode-pr-azdo:hasActivePr && vscode-pr-azdo:activeEditorInPr && isInDiffEditor",
+          "group": "navigation@10"
+        }
+      ],
       "view/title": [
         {
           "command": "vscode-pr-azdo.refreshPullRequests",

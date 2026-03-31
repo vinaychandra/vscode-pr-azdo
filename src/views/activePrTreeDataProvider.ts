@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread, GitPullRequestIteration } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentType, CommentThreadStatus, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
 import { isAuthError } from '../azdo/apiClient';
 import type { API } from '../typings/git';
@@ -44,6 +44,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _authorFilter: string | null = null;
     private _reviewMode = false;
     private _reviewedFiles = new Set<string>();
+    private _changeTypeMap = new Map<string, VersionControlChangeType>();
     private _parentMap = new Map<ActivePrTreeItem, ActivePrTreeItem | undefined>();
 
     /** Expose for context key. */
@@ -71,6 +72,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     get changedFilePaths(): string[] {
         if (!this._fileTree) { return []; }
         return this.collectFilePaths(this._fileTree);
+    }
+
+    /** Look up the change type for a file path (relative to repo root). */
+    getChangeType(filePath: string): VersionControlChangeType | undefined {
+        return this._changeTypeMap.get(filePath);
     }
 
     private collectFilePaths(nodes: (FolderItem | FileChangeItem)[]): string[] {
@@ -264,6 +270,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._commits = undefined;
         this._allThreads = undefined;
         this._iterations = undefined;
+        this._changeTypeMap.clear();
         this._activePr = undefined;
         void this.detectActivePr();
     }
@@ -410,6 +417,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 const iterationChanges = await this.prService.getPrIterationChanges(prId, latestIteration.id);
                 const changes = (iterationChanges.changeEntries ?? []) as GitPullRequestChange[];
                 this._fileTree = buildFileTree(changes);
+                this._changeTypeMap.clear();
+                for (const ch of changes) {
+                    const rawPath = (ch as any).item?.path as string | undefined;
+                    if (rawPath) {
+                        const p = rawPath.startsWith('/') ? rawPath.substring(1) : rawPath;
+                        this._changeTypeMap.set(p, (ch as any).changeType ?? VersionControlChangeType.None);
+                    }
+                }
                 this.log.appendLine(`[active-pr] Loaded ${changes.length} file change(s) from iteration ${latestIteration.id}`);
             } else {
                 this._fileTree = [];

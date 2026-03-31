@@ -6,6 +6,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **Toggle File / Diff view from comments** — when viewing a file opened from a PR comment, a new `$(git-compare)` button appears in the editor title bar to switch to the diff view for that file. From the diff view, clicking the button switches back to the file view. Cursor position is preserved across toggles. The button only appears for files belonging to the active pull request.
+
 ### Fixed
 
 - **Auto-recovery from authorization errors** — when the extension encounters a `TF400813` (or other auth) error during normal operation (e.g. fetching PRs, loading threads), it now automatically clears the tenant cache, resets the connection, and rebuilds the API client. Previously this required manually running the "Clear Auth Cache" command. A 30-second cooldown prevents rapid rebuild loops.

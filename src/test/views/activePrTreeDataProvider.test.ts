@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { ActivePrTreeDataProvider, type CommentFilter } from '../../views/activePrTreeDataProvider';
 import { ActivePrRootItem, ReviewModeToggleItem } from '../../views/activePrTreeItems';
-import { CommentThreadStatus, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentThreadStatus, CommentType, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequestCommentThread, GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../../azdo/prService';
 import type { API, Repository, RepositoryState } from '../../typings/git';
@@ -675,6 +675,142 @@ suite('ActivePrTreeDataProvider — Auth Error Recovery', () => {
         if (prRoot) { await provider.getChildren(prRoot); }
 
         assert.ok(authErrorCalled, 'onAuthError should be called for auth error in ensureData');
+        provider.dispose();
+    });
+});
+
+// --- getChangeType tests ---
+
+/** Create a provider with an active PR and file changes that populate _changeTypeMap. */
+async function createProviderWithChanges(
+    changes: { path: string; changeType: VersionControlChangeType }[],
+): Promise<ActivePrTreeDataProvider> {
+    const pr: GitPullRequest = {
+        pullRequestId: 99,
+        title: 'Change Type Test PR',
+        createdBy: { displayName: 'Owner', id: 'owner-id' },
+        sourceRefName: 'refs/heads/feature',
+        targetRefName: 'refs/heads/main',
+        status: 1,
+    } as any;
+
+    const changeEntries = changes.map(c => ({
+        item: { path: '/' + c.path },
+        changeType: c.changeType,
+    }));
+
+    const provider = new ActivePrTreeDataProvider(
+        createMockPrService({
+            findPrForBranch: async () => pr,
+            getPrIterations: async () => [{ id: 1 }] as any,
+            getPrIterationChanges: async () => ({ changeEntries }),
+            getPrCommits: async () => [],
+            getPrThreads: async () => [],
+        }),
+        createMockGitApi('feature'),
+        createMockLog(),
+    );
+
+    await provider.detectActivePr();
+    const roots = await provider.getChildren();
+    const prRoot = roots.find(r => r instanceof ActivePrRootItem);
+    if (prRoot) {
+        await provider.getChildren(prRoot);
+    }
+
+    return provider;
+}
+
+suite('ActivePrTreeDataProvider — getChangeType', () => {
+    test('returns undefined when no data loaded', () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService(),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        assert.strictEqual(provider.getChangeType('src/index.ts'), undefined);
+        provider.dispose();
+    });
+
+    test('returns correct change type for edited file', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/index.ts', changeType: VersionControlChangeType.Edit },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/index.ts'), VersionControlChangeType.Edit);
+        provider.dispose();
+    });
+
+    test('returns correct change type for added file', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/new.ts', changeType: VersionControlChangeType.Add },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/new.ts'), VersionControlChangeType.Add);
+        provider.dispose();
+    });
+
+    test('returns correct change type for deleted file', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/old.ts', changeType: VersionControlChangeType.Delete },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/old.ts'), VersionControlChangeType.Delete);
+        provider.dispose();
+    });
+
+    test('returns undefined for unknown file path', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/index.ts', changeType: VersionControlChangeType.Edit },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/other.ts'), undefined);
+        provider.dispose();
+    });
+
+    test('tracks multiple files with different change types', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/index.ts', changeType: VersionControlChangeType.Edit },
+            { path: 'src/new.ts', changeType: VersionControlChangeType.Add },
+            { path: 'src/old.ts', changeType: VersionControlChangeType.Delete },
+            { path: 'README.md', changeType: VersionControlChangeType.Edit },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/index.ts'), VersionControlChangeType.Edit);
+        assert.strictEqual(provider.getChangeType('src/new.ts'), VersionControlChangeType.Add);
+        assert.strictEqual(provider.getChangeType('src/old.ts'), VersionControlChangeType.Delete);
+        assert.strictEqual(provider.getChangeType('README.md'), VersionControlChangeType.Edit);
+        assert.strictEqual(provider.getChangeType('nonexistent.ts'), undefined);
+        provider.dispose();
+    });
+
+    test('strips leading slash from AzDO paths', async () => {
+        // AzDO returns paths like /src/index.ts — the map should store them without leading /
+        const provider = await createProviderWithChanges([
+            { path: 'src/index.ts', changeType: VersionControlChangeType.Edit },
+        ]);
+        // The path stored should be without leading /
+        assert.strictEqual(provider.getChangeType('src/index.ts'), VersionControlChangeType.Edit);
+        // With leading / should not match
+        assert.strictEqual(provider.getChangeType('/src/index.ts'), undefined);
+        provider.dispose();
+    });
+
+    test('changedFilePaths and getChangeType are consistent', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/a.ts', changeType: VersionControlChangeType.Edit },
+            { path: 'src/b.ts', changeType: VersionControlChangeType.Add },
+        ]);
+        const paths = provider.changedFilePaths;
+        for (const p of paths) {
+            assert.notStrictEqual(provider.getChangeType(p), undefined, `getChangeType should return a value for ${p}`);
+        }
+        provider.dispose();
+    });
+
+    test('refresh clears changeTypeMap', async () => {
+        const provider = await createProviderWithChanges([
+            { path: 'src/index.ts', changeType: VersionControlChangeType.Edit },
+        ]);
+        assert.strictEqual(provider.getChangeType('src/index.ts'), VersionControlChangeType.Edit);
+        // After refresh, the map is cleared (provider re-detects PR, but with no active branch the map stays empty)
+        provider.refresh();
+        assert.strictEqual(provider.getChangeType('src/index.ts'), undefined);
         provider.dispose();
     });
 });
