@@ -568,6 +568,11 @@
           "default": "",
           "markdownDescription": "Custom system prompt for the `/review-quick` command (quick summary). Leave empty to use the default. Run `Azure DevOps PR: View Default Prompts` to see the defaults.",
           "editPresentation": "multilineText"
+        },
+        "vscode-pr-azdo.persistDraftComments": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Persist draft comments in workspace state so they survive extension reloads and VS Code restarts."
         }
       }
     }

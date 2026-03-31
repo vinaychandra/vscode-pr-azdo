@@ -1187,6 +1187,122 @@ export class PrCommentController implements vscode.Disposable {
             d.dispose();
         }
     }
+
+    // ------------------------------------------------------------------
+    // Draft persistence — serialize/deserialize for workspace state
+    // ------------------------------------------------------------------
+
+    /** Serialize all current drafts into a JSON-safe object for persistence. */
+    serializeDrafts(): PersistedDrafts {
+        const aiDrafts: PersistedAiDraft[] = [];
+        for (const thread of this._draftThreads) {
+            const info = this.getDraftInfo(thread);
+            if (!info) { continue; }
+            // Extract type from author name: "AI Review (Performance)" → "Performance"
+            const authorName = thread.comments[0]?.author?.name ?? '';
+            const typeMatch = authorName.match(/^AI Review \((.+)\)$/);
+            aiDrafts.push({
+                filePath: info.filePath,
+                line: info.line,
+                body: info.body,
+                type: typeMatch?.[1],
+            });
+        }
+
+        const userDrafts: PersistedUserDraft[] = [];
+        for (const thread of this._userDraftThreads) {
+            const info = this.getUserDraftInfo(thread);
+            if (info) {
+                userDrafts.push(info);
+            }
+        }
+
+        const replyDrafts: PersistedReplyDraft[] = [];
+        for (const [thread, info] of this._replyDraftThreads) {
+            const body = this._replyDraftBodies.get(thread);
+            if (body) {
+                replyDrafts.push({
+                    azdoThreadId: info.azdoThreadId,
+                    authorName: info.authorName,
+                    body,
+                });
+            }
+        }
+
+        this.log.appendLine(`[comments] Serialized drafts: ${aiDrafts.length} AI, ${userDrafts.length} user, ${replyDrafts.length} reply`);
+        return { aiDrafts, userDrafts, replyDrafts };
+    }
+
+    /**
+     * Restore drafts from a persisted object.
+     * Call after PR context and threads are loaded so reply drafts can attach to existing threads.
+     */
+    restoreDrafts(data: PersistedDrafts): void {
+        let restored = 0;
+
+        for (const d of data.aiDrafts ?? []) {
+            if (this.createDraftThread(d.filePath, d.line, d.body, d.type)) {
+                restored++;
+            }
+        }
+
+        for (const d of data.userDrafts ?? []) {
+            const root = this._workspaceRoot;
+            if (!root) { continue; }
+            const fileUri = vscode.Uri.joinPath(root, d.filePath);
+            const range = new vscode.Range(
+                Math.max(0, d.startLine - 1), Math.max(0, d.startCol - 1),
+                Math.max(0, d.endLine - 1), Math.max(0, d.endCol - 1),
+            );
+            this.createUserDraftThread(fileUri, range, d.body);
+            restored++;
+        }
+
+        for (const d of data.replyDrafts ?? []) {
+            const thread = this.findThreadByAzdoId(d.azdoThreadId);
+            if (!thread) {
+                this.log.appendLine(`[comments] Cannot restore reply draft: AzDO thread ${d.azdoThreadId} not found`);
+                continue;
+            }
+            if (d.authorName.includes('AI')) {
+                this.prefillReplyDraft(thread, d.body);
+            } else {
+                this.saveReplyAsDraft(thread, d.body);
+            }
+            restored++;
+        }
+
+        this.log.appendLine(`[comments] Restored ${restored} draft(s) from workspace state`);
+    }
+}
+
+/** Serializable format for persisted drafts. */
+export interface PersistedDrafts {
+    aiDrafts: PersistedAiDraft[];
+    userDrafts: PersistedUserDraft[];
+    replyDrafts: PersistedReplyDraft[];
+}
+
+interface PersistedAiDraft {
+    filePath: string;
+    line: number;
+    body: string;
+    type?: string;
+}
+
+interface PersistedUserDraft {
+    filePath: string;
+    startLine: number;
+    startCol: number;
+    endLine: number;
+    endCol: number;
+    body: string;
+}
+
+interface PersistedReplyDraft {
+    azdoThreadId: number;
+    authorName: string;
+    body: string;
 }
 
 function statusLabel(status: CommentThreadStatus): string {

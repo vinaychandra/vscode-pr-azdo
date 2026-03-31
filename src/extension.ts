@@ -9,7 +9,7 @@ import { PullRequestTreeItem } from './views/prTreeItems';
 import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
-import { PrCommentController, PR_COMMENTS_SCHEME } from './views/prCommentController';
+import { PrCommentController, PR_COMMENTS_SCHEME, type PersistedDrafts } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { computeRelativePath, extractPathFromGitRefUri, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
@@ -125,6 +125,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// --- Review Mode ---
 	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
+
+	// --- Draft Persistence ---
+	const DRAFT_STATE_KEY = 'draftComments';
+	const draftsRestoredForPr = new Set<number>();
 
 	// Track branches checked out by the extension (for auto-delete on switch)
 	function getExtensionCheckedOutBranches(): Set<string> {
@@ -349,6 +353,17 @@ export async function activate(context: vscode.ExtensionContext) {
 					commentController.updateThreads(activePrProvider?.filteredThreads);
 					// Keep AI context provider in sync
 					prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations);
+
+					// Restore persisted drafts once after threads are loaded
+					if (pr?.pullRequestId && !draftsRestoredForPr.has(pr.pullRequestId)) {
+						draftsRestoredForPr.add(pr.pullRequestId);
+						if (vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('persistDraftComments')) {
+							const saved = context.workspaceState.get<PersistedDrafts>(`${DRAFT_STATE_KEY}-${pr.pullRequestId}`);
+							if (saved) {
+								commentController.restoreDrafts(saved);
+							}
+						}
+					}
 				});
 			});
 		} else {
@@ -1403,9 +1418,24 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Refresh comment threads when a comment action is performed (incremental — no full data reload)
+	// Also persist drafts to workspace state if enabled.
+	let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
+	const saveDraftsDebounced = () => {
+		if (!vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('persistDraftComments')) { return; }
+		const prId = activePrProvider?._activePrForContext?.pullRequestId;
+		if (!prId) { return; }
+		if (draftSaveTimer) { clearTimeout(draftSaveTimer); }
+		draftSaveTimer = setTimeout(() => {
+			const data = commentController.serializeDrafts();
+			void context.workspaceState.update(`${DRAFT_STATE_KEY}-${prId}`, data);
+			outputChannel.appendLine(`[comments] Persisted drafts for PR ${prId}`);
+		}, 500);
+	};
+
 	context.subscriptions.push(
 		commentController.onDidPerformAction(() => {
 			void activePrProvider?.refreshThreadsOnly();
+			saveDraftsDebounced();
 		}),
 	);
 

@@ -542,6 +542,40 @@ suite('PrCommentController', () => {
 
         controller.dispose();
     });
+
+    // --- Draft persistence (serialization) ---
+
+    test('serializeDrafts returns empty structure with no drafts', () => {
+        const controller = new PrCommentController(createMockLog());
+        const data = controller.serializeDrafts();
+        assert.deepStrictEqual(data.aiDrafts, []);
+        assert.deepStrictEqual(data.userDrafts, []);
+        assert.deepStrictEqual(data.replyDrafts, []);
+        controller.dispose();
+    });
+
+    test('restoreDrafts with empty data does not throw', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.restoreDrafts({ aiDrafts: [], userDrafts: [], replyDrafts: [] });
+        assert.strictEqual(controller.draftCount, 0);
+        assert.strictEqual(controller.userDraftCount, 0);
+        controller.dispose();
+    });
+
+    test('restoreDrafts skips reply drafts when thread not found', () => {
+        const controller = new PrCommentController(createMockLog());
+        // Reply draft referencing non-existent AzDO thread — should not throw
+        controller.restoreDrafts({
+            aiDrafts: [],
+            userDrafts: [],
+            replyDrafts: [{
+                azdoThreadId: 999,
+                authorName: 'You (Draft)',
+                body: 'orphaned reply',
+            }],
+        });
+        controller.dispose();
+    });
 });
 
 // ---------------------------------------------------------------------------

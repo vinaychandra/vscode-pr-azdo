@@ -28,6 +28,8 @@ When you're on a branch with an open PR, the extension automatically detects it 
 - **Suggestion diffs** are rendered as rich `- / +` diffs showing the proposed change
 - **Reply** to existing threads directly from the editor
 - **New comments** — click the `+` gutter icon on any PR file to start a new thread
+- **Draft comments** — click "Save as Draft" to save comments locally without posting to Azure DevOps; drafts appear in both the Comments panel and sidebar tree under their respective files; edit and update drafts before publishing; works for new comments and replies on existing threads
+- **Draft persistence** — enable `persistDraftComments` in settings to preserve drafts across VS Code restarts
 - **Thread status** — Resolve, Won't Fix, Close, or Reactivate threads from inline buttons
 - **Non-disruptive updates** — posting a comment or reply updates threads incrementally without resetting collapsed/expanded state
 

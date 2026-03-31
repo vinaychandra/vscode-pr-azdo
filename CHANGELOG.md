@@ -15,6 +15,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
   - **Post or dismiss** — each draft has "Post" (cloud-upload) and "Dismiss" (close) buttons in the thread title bar.
   - **Reply drafts** — save a reply as a draft on an existing AzDO thread.
   - **AI draft support** — AI review drafts now also show in the sidebar tree view and support the "Update Draft" button.
+  - **Draft persistence** — enable `vscode-pr-azdo.persistDraftComments` in settings to preserve drafts across VS Code restarts, scoped per PR.
 - **Toggle File / Diff view from comments** — when viewing a file opened from a PR comment, a new `$(git-compare)` button appears in the editor title bar to switch to the diff view for that file. From the diff view, clicking the button switches back to the file view. Cursor position is preserved across toggles. The button only appears for files belonging to the active pull request.
 
 ### Fixed
