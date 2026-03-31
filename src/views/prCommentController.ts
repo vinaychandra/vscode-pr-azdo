@@ -480,9 +480,7 @@ export class PrCommentController implements vscode.Disposable {
 
         const root = this._workspaceRoot;
         if (!root) {
-            this.disposeThreads();
-            this.log.appendLine('[comments] No workspace root — cannot resolve file paths');
-            return;
+            this.log.appendLine('[comments] No workspace root — file-level threads will be skipped');
         }
 
         // Build a lookup of existing VS Code threads by their AzDO thread id
@@ -544,6 +542,11 @@ export class PrCommentController implements vscode.Disposable {
                     created++;
                 }
                 prLevelLine += comments.length + 2; // Space between threads
+                continue;
+            }
+
+            // File-level threads need a workspace root to resolve paths
+            if (!root) {
                 continue;
             }
 
