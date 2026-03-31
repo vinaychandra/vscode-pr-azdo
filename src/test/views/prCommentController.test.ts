@@ -480,6 +480,68 @@ suite('PrCommentController', () => {
         controller.removeReplyDraft(fakeThread);
         controller.dispose();
     });
+
+    // --- Reply draft preservation across updateThreads ---
+
+    test('updateReplyDraft does not lose draft on non-draft thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        // Should be a no-op, not throw
+        controller.updateReplyDraft(fakeThread, 'new body');
+        assert.strictEqual(controller.hasReplyDraft(fakeThread), false);
+        controller.dispose();
+    });
+
+    test('updateAiDraft is no-op for non-AI-draft thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = { comments: [] } as unknown as vscode.CommentThread;
+        // Should not throw
+        controller.updateAiDraft(fakeThread, 'new body');
+        controller.dispose();
+    });
+
+    test('updateUserDraft is no-op for non-user-draft thread', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = { comments: [] } as unknown as vscode.CommentThread;
+        // Should not throw
+        controller.updateUserDraft(fakeThread, 'new body');
+        controller.dispose();
+    });
+
+    test('getDraftSummaries returns empty array initially', () => {
+        const controller = new PrCommentController(createMockLog());
+        assert.deepStrictEqual(controller.getDraftSummaries(), []);
+        controller.dispose();
+    });
+
+    test('saveReplyAsDraft stores body for preservation', () => {
+        // Create a controller with a real thread via createThreadOnUri, then
+        // manually wire it as an AzDO thread so saveReplyAsDraft can track it.
+        const controller = new PrCommentController(createMockLog());
+        const uri = vscode.Uri.parse('file:///test');
+        const range = new vscode.Range(9, 0, 9, 0);
+        const comments: vscode.Comment[] = [{
+            body: new vscode.MarkdownString('Original comment'),
+            mode: vscode.CommentMode.Preview,
+            author: { name: 'Alice' },
+        }];
+        const thread = controller.createThreadOnUri(uri, range, comments);
+        assert.strictEqual(thread.comments.length, 1);
+
+        // saveReplyAsDraft appends a draft — but without threadMetaMap entry,
+        // the azdoThreadId won't be set, so hasReplyDraft won't track it.
+        // This is expected: saveReplyAsDraft requires a real AzDO thread context.
+        controller.saveReplyAsDraft(thread, 'My draft reply');
+        // The draft comment is appended even without threadMetaMap
+        assert.strictEqual(thread.comments.length, 2);
+        const lastComment = thread.comments[1];
+        const body = typeof lastComment.body === 'string'
+            ? lastComment.body
+            : (lastComment.body as vscode.MarkdownString).value;
+        assert.strictEqual(body, 'My draft reply');
+
+        controller.dispose();
+    });
 });
 
 // ---------------------------------------------------------------------------

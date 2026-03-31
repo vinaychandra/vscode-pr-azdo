@@ -399,22 +399,22 @@
         },
         {
           "command": "vscode-pr-azdo.resolveThread",
-          "when": "commentThread =~ /azdoPrThread/",
+          "when": "commentThread =~ /^azdoPrThread$/",
           "group": "status"
         },
         {
           "command": "vscode-pr-azdo.wontFixThread",
-          "when": "commentThread =~ /azdoPrThread/",
+          "when": "commentThread =~ /^azdoPrThread$/",
           "group": "status"
         },
         {
           "command": "vscode-pr-azdo.closeThread",
-          "when": "commentThread =~ /azdoPrThread/",
+          "when": "commentThread =~ /^azdoPrThread$/",
           "group": "status"
         },
         {
           "command": "vscode-pr-azdo.reactivateThread",
-          "when": "commentThread =~ /azdoPrThread/",
+          "when": "commentThread =~ /azdoPrThread-inactive/",
           "group": "status"
         }
       ],

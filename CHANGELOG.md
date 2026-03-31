@@ -20,6 +20,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Fixed
 
 - **Auto-recovery from authorization errors** — when the extension encounters a `TF400813` (or other auth) error during normal operation (e.g. fetching PRs, loading threads), it now automatically clears the tenant cache, resets the connection, and rebuilds the API client. Previously this required manually running the "Clear Auth Cache" command. A 30-second cooldown prevents rapid rebuild loops.
+- **Reply drafts preserved across thread refreshes** — editing a reply draft no longer causes it to disappear from the thread and orphan in the sidebar. Draft text and context are now stored separately and re-applied after AzDO thread data refreshes.
+- **Reactivate button hidden on active comments** — the "Reactivate" context menu item now only appears on resolved/closed/fixed threads, not on already-active ones. Conversely, "Resolve", "Won't Fix", and "Close" are hidden on inactive threads.
 
 ## [0.0.9]
 
