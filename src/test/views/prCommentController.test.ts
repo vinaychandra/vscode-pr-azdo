@@ -265,6 +265,35 @@ suite('PrCommentController', () => {
         controller.dispose();
     });
 
+    // --- User draft threads ---
+
+    test('userDraftCount is 0 initially', () => {
+        const controller = new PrCommentController(createMockLog());
+        assert.strictEqual(controller.userDraftCount, 0);
+        controller.dispose();
+    });
+
+    test('isUserDraft returns false for non-user-draft threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.isUserDraft(fakeThread), false);
+        controller.dispose();
+    });
+
+    test('getUserDraftInfo returns undefined for non-user-draft threads', () => {
+        const controller = new PrCommentController(createMockLog());
+        const fakeThread = {} as vscode.CommentThread;
+        assert.strictEqual(controller.getUserDraftInfo(fakeThread), undefined);
+        controller.dispose();
+    });
+
+    test('clearUserDrafts resets userDraftCount to 0', () => {
+        const controller = new PrCommentController(createMockLog());
+        controller.clearUserDrafts();
+        assert.strictEqual(controller.userDraftCount, 0);
+        controller.dispose();
+    });
+
     // --- setPrContext ---
 
     test('setPrContext enables PR context for operations', () => {

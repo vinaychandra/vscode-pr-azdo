@@ -203,6 +203,32 @@
         "title": "Clear All AI Drafts"
       },
       {
+        "command": "vscode-pr-azdo.postUserDraft",
+        "title": "Post Draft Comment",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "vscode-pr-azdo.postUserDraftFromEdit",
+        "title": "Post Comment",
+        "icon": "$(check)"
+      },
+      {
+        "command": "vscode-pr-azdo.dismissUserDraft",
+        "title": "Dismiss Draft",
+        "icon": "$(close)"
+      },
+      {
+        "command": "vscode-pr-azdo.saveAsDraft",
+        "title": "Save as Draft",
+        "icon": "$(bookmark)",
+        "enablement": "!commentIsEmpty"
+      },
+      {
+        "command": "vscode-pr-azdo.updateDraft",
+        "title": "Update Draft",
+        "icon": "$(bookmark)"
+      },
+      {
         "command": "vscode-pr-azdo.reviewWithAI",
         "title": "Review with Copilot",
         "icon": "$(sparkle)"
@@ -348,13 +374,28 @@
           "command": "vscode-pr-azdo.dismissDraft",
           "when": "commentThread =~ /replyDraft/",
           "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.postUserDraft",
+          "when": "commentThread =~ /azdoPrUserDraft/",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-pr-azdo.dismissUserDraft",
+          "when": "commentThread =~ /azdoPrUserDraft/",
+          "group": "navigation"
         }
       ],
       "comments/commentThread/context": [
         {
           "command": "vscode-pr-azdo.submitComment",
           "when": "commentController == azdo-pr-comments",
-          "group": "inline"
+          "group": "inline@1"
+        },
+        {
+          "command": "vscode-pr-azdo.saveAsDraft",
+          "when": "commentController == azdo-pr-comments && commentThread != azdoPrDraft && commentThread != azdoPrUserDraft",
+          "group": "inline@2"
         },
         {
           "command": "vscode-pr-azdo.resolveThread",
@@ -391,7 +432,27 @@
           "group": "inline"
         },
         {
+          "command": "vscode-pr-azdo.updateDraft",
+          "when": "commentThread =~ /azdoPrDraft/",
+          "group": "inline"
+        },
+        {
           "command": "vscode-pr-azdo.postDraftFromEdit",
+          "when": "commentThread =~ /replyDraft/",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.postUserDraftFromEdit",
+          "when": "commentThread =~ /azdoPrUserDraft/",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.updateDraft",
+          "when": "commentThread =~ /azdoPrUserDraft/",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-pr-azdo.updateDraft",
           "when": "commentThread =~ /replyDraft/",
           "group": "inline"
         },

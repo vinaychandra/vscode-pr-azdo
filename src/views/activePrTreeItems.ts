@@ -81,7 +81,7 @@ export class FolderItem extends vscode.TreeItem {
 }
 
 export class FileChangeItem extends vscode.TreeItem {
-    readonly commentThreads: CommentThreadItem[] = [];
+    readonly commentThreads: (CommentThreadItem | DraftCommentItem)[] = [];
 
     constructor(
         public readonly fileName: string,
@@ -170,6 +170,36 @@ export class CommentThreadItem extends vscode.TreeItem {
 }
 
 // ---------------------------------------------------------------------------
+// Draft comment node (local-only drafts shown in the tree)
+// ---------------------------------------------------------------------------
+
+/**
+ * Represents a local draft comment (user or AI) in the sidebar tree.
+ */
+export class DraftCommentItem extends vscode.TreeItem {
+    constructor(
+        public readonly filePath: string,
+        public readonly line: number,
+        content: string,
+        public readonly kind: 'user' | 'ai' | 'reply',
+    ) {
+        const truncated = content.length > 80 ? content.substring(0, 77) + '…' : content;
+        const kindLabel = kind === 'ai' ? '✨ AI Draft' : '📝 Draft';
+        super(truncated, vscode.TreeItemCollapsibleState.None);
+        this.description = kindLabel;
+        this.iconPath = new vscode.ThemeIcon(kind === 'ai' ? 'sparkle' : 'bookmark');
+        this.contextValue = 'activePr.draft';
+        this.tooltip = new vscode.MarkdownString(`**${kindLabel}** — ${filePath}:${line}\n\n${content}`);
+
+        this.command = {
+            command: 'vscode-pr-azdo.goToComment',
+            title: 'Go to Draft',
+            arguments: [filePath, line],
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Commit node
 // ---------------------------------------------------------------------------
 
@@ -196,6 +226,7 @@ export type ActivePrTreeItem =
     | FolderItem
     | FileChangeItem
     | CommentThreadItem
+    | DraftCommentItem
     | CommitItem;
 
 // ---------------------------------------------------------------------------

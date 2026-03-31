@@ -11,6 +11,7 @@ import {
     FolderItem,
     FileChangeItem,
     CommentThreadItem,
+    DraftCommentItem,
     CommitItem,
     buildFileTree,
     type ActivePrTreeItem,
@@ -209,6 +210,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     get reviewMode(): boolean {
         return this._reviewMode;
+    }
+
+    /** Optional callback to get draft comment summaries for tree display. */
+    private _draftProvider?: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[];
+
+    /** Set the draft provider callback (typically from PrCommentController.getDraftSummaries). */
+    setDraftProvider(provider: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[]): void {
+        this._draftProvider = provider;
     }
 
     constructor(
@@ -496,6 +505,19 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
         // Attach to file items
         this.attachCommentsToFiles(this._fileTree, byFile);
+
+        // Attach draft comments to their file items
+        if (this._draftProvider) {
+            const drafts = this._draftProvider();
+            const draftsByFile = new Map<string, DraftCommentItem[]>();
+            for (const d of drafts) {
+                if (!draftsByFile.has(d.filePath)) {
+                    draftsByFile.set(d.filePath, []);
+                }
+                draftsByFile.get(d.filePath)!.push(new DraftCommentItem(d.filePath, d.line, d.body, d.kind));
+            }
+            this.attachDraftsToFiles(this._fileTree, draftsByFile);
+        }
     }
 
     private applyThreadFilter(threads: GitPullRequestCommentThread[]): GitPullRequestCommentThread[] {
@@ -533,7 +555,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     /** Get filtered comments for a specific file. */
-    private getFilteredFileComments(file: FileChangeItem): CommentThreadItem[] {
+    private getFilteredFileComments(file: FileChangeItem): (CommentThreadItem | DraftCommentItem)[] {
         return file.commentThreads;
     }
 
@@ -563,6 +585,23 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 }
             } else if (node instanceof FolderItem) {
                 this.attachCommentsToFiles(node.children, byFile);
+            }
+        }
+    }
+
+    private attachDraftsToFiles(
+        nodes: (FolderItem | FileChangeItem)[],
+        draftsByFile: Map<string, DraftCommentItem[]>,
+    ): void {
+        for (const node of nodes) {
+            if (node instanceof FileChangeItem) {
+                const drafts = draftsByFile.get(node.filePath);
+                if (drafts) {
+                    node.commentThreads.push(...drafts);
+                    node.finalizeComments();
+                }
+            } else if (node instanceof FolderItem) {
+                this.attachDraftsToFiles(node.children, draftsByFile);
             }
         }
     }

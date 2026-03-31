@@ -30,6 +30,12 @@ export class PrCommentController implements vscode.Disposable {
     /** AI-generated draft comment threads (local only, not posted to AzDO). */
     private _draftThreads: vscode.CommentThread[] = [];
 
+    /** User-authored draft comment threads (local only, posted on explicit publish). */
+    private _userDraftThreads: vscode.CommentThread[] = [];
+
+    /** Position metadata for user draft threads (full range info for accurate AzDO posting). */
+    private _userDraftPositions = new Map<vscode.CommentThread, { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number }>();
+
     /** Map VS Code thread → AzDO thread metadata for API calls. */
     private _threadMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
 
@@ -308,7 +314,7 @@ export class PrCommentController implements vscode.Disposable {
         return this._threadMetaMap.get(thread)?.id;
     }
 
-    /** Find the parent thread that contains a given comment (searches both real and draft threads). */
+    /** Find the parent thread that contains a given comment (searches real, AI draft, and user draft threads). */
     findThreadForComment(comment: vscode.Comment): vscode.CommentThread | undefined {
         for (const thread of this._threads) {
             if (Array.from(thread.comments).includes(comment)) {
@@ -316,6 +322,11 @@ export class PrCommentController implements vscode.Disposable {
             }
         }
         for (const thread of this._draftThreads) {
+            if (Array.from(thread.comments).includes(comment)) {
+                return thread;
+            }
+        }
+        for (const thread of this._userDraftThreads) {
             if (Array.from(thread.comments).includes(comment)) {
                 return thread;
             }
@@ -755,11 +766,13 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     private disposeThreads(): void {
+        this.log.appendLine(`[comments] disposeThreads: disposing ${this._threads.length} threads, ${this._userDraftThreads.length} user drafts`);
         for (const t of this._threads) {
             t.dispose();
         }
         this._threads = [];
         this._threadMetaMap.clear();
+        this.clearUserDrafts();
     }
 
     /**
@@ -796,6 +809,7 @@ export class PrCommentController implements vscode.Disposable {
 
         this._draftThreads.push(thread);
         this.log.appendLine(`[comments] Created draft thread on ${filePath} L${line}: ${commentBody.substring(0, 60)}...`);
+        this._onDidPerformAction.fire();
         return thread;
     }
 
@@ -806,6 +820,7 @@ export class PrCommentController implements vscode.Disposable {
             this._draftThreads.splice(idx, 1);
             thread.dispose();
             this.log.appendLine('[comments] Draft dismissed');
+            this._onDidPerformAction.fire();
         }
     }
 
@@ -817,6 +832,9 @@ export class PrCommentController implements vscode.Disposable {
         const count = this._draftThreads.length;
         this._draftThreads = [];
         this.log.appendLine(`[comments] Cleared ${count} draft(s)`);
+        if (count > 0) {
+            this._onDidPerformAction.fire();
+        }
     }
 
     /** Check if a thread is a draft. */
@@ -835,8 +853,170 @@ export class PrCommentController implements vscode.Disposable {
         return { filePath, line, body: text };
     }
 
+    /**
+     * Update an AI draft thread's comment text in-place (without posting).
+     */
+    updateAiDraft(thread: vscode.CommentThread, newBody: string): void {
+        if (!this.isDraft(thread)) { return; }
+        const existingAuthor = thread.comments[0]?.author ?? { name: 'AI Review' };
+        thread.comments = [{
+            body: new vscode.MarkdownString(newBody),
+            mode: vscode.CommentMode.Editing,
+            author: existingAuthor,
+        }];
+        this.log.appendLine(`[comments] AI draft updated: ${newBody.substring(0, 60)}`);
+        this._onDidPerformAction.fire();
+    }
+
     get draftCount(): number {
         return this._draftThreads.length;
+    }
+
+    /** Return summaries of all draft threads (AI + user + reply drafts) for tree display. */
+    getDraftSummaries(): { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[] {
+        const result: { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[] = [];
+
+        for (const thread of this._draftThreads) {
+            const info = this.getDraftInfo(thread);
+            if (info) {
+                result.push({ filePath: info.filePath, line: info.line, body: info.body, kind: 'ai' });
+            }
+        }
+
+        for (const thread of this._userDraftThreads) {
+            const info = this.getUserDraftInfo(thread);
+            if (info) {
+                result.push({ filePath: info.filePath, line: info.startLine, body: info.body, kind: 'user' });
+            }
+        }
+
+        for (const [thread, info] of this._replyDraftThreads) {
+            const filePath = this.resolveFilePath(thread.uri);
+            const line = (thread.range?.start.line ?? 0) + 1;
+            const draftComment = thread.comments[thread.comments.length - 1];
+            const body = draftComment ? (typeof draftComment.body === 'string' ? draftComment.body : (draftComment.body as vscode.MarkdownString)?.value ?? '') : '';
+            if (filePath && body) {
+                result.push({ filePath, line, body, kind: 'reply' });
+            }
+        }
+
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // User draft: local-only comment threads published on demand
+    // ------------------------------------------------------------------
+
+    /**
+     * Create a user draft comment thread (local only, not posted to AzDO).
+     * The thread is styled with a "📝 Draft" label and tracked separately.
+     * Supports editing before publishing.
+     */
+    createUserDraftThread(uri: vscode.Uri, range: vscode.Range, text: string): vscode.CommentThread {
+        this.log.appendLine(`[comments] createUserDraftThread: uri=${uri.toString()}, scheme=${uri.scheme}, range=L${range.start.line + 1}:${range.start.character + 1}-L${range.end.line + 1}:${range.end.character + 1}, text=${text.substring(0, 60)}`);
+        const thread = this._controller.createCommentThread(uri, range, [{
+            body: new vscode.MarkdownString(text),
+            mode: vscode.CommentMode.Editing,
+            author: { name: 'You (Draft)' },
+        }]);
+        thread.canReply = false;
+        thread.label = '📝 Draft';
+        thread.contextValue = 'azdoPrUserDraft';
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+
+        const filePath = this.resolveFilePath(uri);
+        this.log.appendLine(`[comments] createUserDraftThread: resolvedFilePath=${filePath ?? '(undefined)'}`);
+        if (filePath) {
+            this._userDraftPositions.set(thread, {
+                filePath,
+                startLine: range.start.line + 1,
+                startCol: range.start.character + 1,
+                endLine: range.end.line + 1,
+                endCol: range.end.character + 1,
+            });
+        }
+
+        this._userDraftThreads.push(thread);
+        this.log.appendLine(`[comments] Created user draft on ${filePath ?? uri.toString()} L${range.start.line + 1}, total user drafts: ${this._userDraftThreads.length}`);
+        this._onDidPerformAction.fire();
+        return thread;
+    }
+
+    /** Check if a thread is a user draft. */
+    isUserDraft(thread: vscode.CommentThread): boolean {
+        return this._userDraftThreads.includes(thread);
+    }
+
+    /** Get info about a user draft thread for posting. */
+    getUserDraftInfo(thread: vscode.CommentThread): { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; body: string } | undefined {
+        if (!this.isUserDraft(thread)) { return undefined; }
+        const pos = this._userDraftPositions.get(thread);
+        if (!pos) { return undefined; }
+        const body = thread.comments[0]?.body;
+        const text = typeof body === 'string' ? body : (body as vscode.MarkdownString)?.value ?? '';
+        return { ...pos, body: text };
+    }
+
+    /** Dispose a single user draft thread. */
+    disposeUserDraft(thread: vscode.CommentThread): void {
+        const idx = this._userDraftThreads.indexOf(thread);
+        if (idx >= 0) {
+            this._userDraftThreads.splice(idx, 1);
+            this._userDraftPositions.delete(thread);
+            thread.dispose();
+            this.log.appendLine('[comments] User draft dismissed');
+            this._onDidPerformAction.fire();
+        }
+    }
+
+    /**
+     * Update a user draft thread's comment text in-place (without posting).
+     * Switches the comment back to editing mode with the new text.
+     */
+    updateUserDraft(thread: vscode.CommentThread, newBody: string): void {
+        if (!this.isUserDraft(thread)) { return; }
+        thread.comments = [{
+            body: new vscode.MarkdownString(newBody),
+            mode: vscode.CommentMode.Editing,
+            author: { name: 'You (Draft)' },
+        }];
+        this.log.appendLine(`[comments] User draft updated: ${newBody.substring(0, 60)}`);
+        this._onDidPerformAction.fire();
+    }
+
+    /**
+     * Update a reply draft's comment text in-place (without posting).
+     */
+    updateReplyDraft(thread: vscode.CommentThread, newBody: string): void {
+        const info = this._replyDraftThreads.get(thread);
+        if (!info) { return; }
+        // Replace only the last comment (the draft) preserving the originals
+        const originals = thread.comments.slice(0, info.originalCommentCount);
+        const draftComment: vscode.Comment = {
+            body: new vscode.MarkdownString(newBody),
+            mode: vscode.CommentMode.Editing,
+            author: { name: 'You (Draft)' },
+        };
+        thread.comments = [...originals, draftComment];
+        this.log.appendLine(`[comments] Reply draft updated on thread ${info.azdoThreadId}: ${newBody.substring(0, 60)}`);
+        this._onDidPerformAction.fire();
+    }
+
+    /** Dispose all user draft threads. */
+    clearUserDrafts(): void {
+        for (const t of this._userDraftThreads) {
+            t.dispose();
+        }
+        const count = this._userDraftThreads.length;
+        this._userDraftThreads = [];
+        this._userDraftPositions.clear();
+        if (count > 0) {
+            this.log.appendLine(`[comments] Cleared ${count} user draft(s)`);
+        }
+    }
+
+    get userDraftCount(): number {
+        return this._userDraftThreads.length;
     }
 
     // ------------------------------------------------------------------
@@ -885,6 +1065,31 @@ export class PrCommentController implements vscode.Disposable {
         this.log.appendLine(`[comments] Prefilled reply draft on thread ${azdoThreadId}: ${text.substring(0, 60)}…`);
     }
 
+    /**
+     * Save a user-authored reply as a local draft on an existing AzDO thread.
+     * Works like prefillReplyDraft but styled as a user draft.
+     */
+    saveReplyAsDraft(thread: vscode.CommentThread, text: string): void {
+        // Remove any existing reply draft on this thread first
+        this.removeReplyDraft(thread);
+
+        const originalCount = thread.comments.length;
+        const draftComment: vscode.Comment = {
+            body: new vscode.MarkdownString(text),
+            mode: vscode.CommentMode.Editing,
+            author: { name: 'You (Draft)' },
+        };
+        thread.comments = [...thread.comments, draftComment];
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+        thread.contextValue = 'azdoPrThread-replyDraft';
+
+        const azdoThreadId = this._threadMetaMap.get(thread)?.id;
+        if (azdoThreadId) {
+            this._replyDraftThreads.set(thread, { azdoThreadId, originalCommentCount: originalCount });
+        }
+        this.log.appendLine(`[comments] Saved user reply draft on thread ${azdoThreadId}: ${text.substring(0, 60)}…`);
+    }
+
     /** Check if a thread has a pending reply draft. */
     hasReplyDraft(thread: vscode.CommentThread): boolean {
         return this._replyDraftThreads.has(thread);
@@ -918,6 +1123,7 @@ export class PrCommentController implements vscode.Disposable {
     dispose(): void {
         this.disposeThreads();
         this.clearDrafts();
+        this.clearUserDrafts();
         this._controller.dispose();
         this._onDidPerformAction.dispose();
         for (const d of this._disposables) {

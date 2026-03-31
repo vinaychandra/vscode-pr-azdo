@@ -298,6 +298,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			context.subscriptions.push(treeProvider);
 
 			activePrProvider = new ActivePrTreeDataProvider(prService, gitApi!, outputChannel, handleAuthError);
+			activePrProvider.setDraftProvider(() => commentController.getDraftSummaries());
 			context.subscriptions.push(activePrProvider);
 
 			// Forward real provider's change events through stable proxy emitters
@@ -649,7 +650,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Submit a comment reply or new comment
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.submitComment', async (reply: vscode.CommentReply) => {
-			if (!reply) { return; }
+			outputChannel.appendLine(`[comments] submitComment ENTER: reply=${!!reply}, thread=${!!reply?.thread}, text=${reply?.text?.substring(0, 60) ?? '(none)'}`);
+			if (!reply) {
+				outputChannel.appendLine(`[comments] submitComment: no reply arg — returning`);
+				return;
+			}
 
 			// Reply draft on existing thread → post as reply to AzDO thread
 			if (commentController.hasReplyDraft(reply.thread)) {
@@ -718,9 +723,42 @@ export async function activate(context: vscode.ExtensionContext) {
 			const threadId = commentController.getThreadId(reply.thread);
 			if (threadId) {
 				// Existing thread → reply
+				outputChannel.appendLine(`[comments] submitComment: existing thread ${threadId} → reply`);
 				await commentController.handleReply(reply);
+			} else if (commentController.isUserDraft(reply.thread)) {
+				// User draft thread → post to AzDO with the (possibly edited) text
+				outputChannel.appendLine(`[comments] submitComment: user draft thread → post to AzDO`);
+				const info = commentController.getUserDraftInfo(reply.thread);
+				if (!info || !prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+					vscode.window.showWarningMessage('No active PR context.');
+					return;
+				}
+				const prId = activePrProvider._activePrForContext.pullRequestId;
+				const body = reply.text.trim() || info.body;
+				if (!body.trim()) {
+					vscode.window.showWarningMessage('Comment cannot be empty.');
+					return;
+				}
+				try {
+					outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine}`);
+					await prService.createThread(prId, body, {
+						filePath: `/${info.filePath}`,
+						startLine: info.startLine,
+						startCol: info.startCol,
+						endLine: info.endLine,
+						endCol: info.endCol,
+					});
+					commentController.disposeUserDraft(reply.thread);
+					vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
+					activePrProvider.refresh();
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[comments] Failed to post user draft: ${msg}`);
+					vscode.window.showErrorMessage(`Failed to post comment: ${msg}`);
+				}
 			} else {
-				// New thread from gutter
+				// New thread from gutter → post immediately
+				outputChannel.appendLine(`[comments] submitComment: new gutter thread → posting immediately`);
 				await commentController.handleNewComment(reply);
 			}
 		}),
@@ -1074,6 +1112,191 @@ export async function activate(context: vscode.ExtensionContext) {
 				commentController.disposeDraft(vsThread);
 			} else if (vsThread && commentController.hasReplyDraft(vsThread)) {
 				commentController.removeReplyDraft(vsThread);
+			} else if (vsThread && commentController.isUserDraft(vsThread)) {
+				commentController.disposeUserDraft(vsThread);
+			}
+		}),
+	);
+
+	// --- User draft comment actions ---
+
+	// Post a user draft comment to AzDO
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.postUserDraft', async (threadOrItem: unknown) => {
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (!vsThread || !commentController.isUserDraft(vsThread)) {
+				vscode.window.showWarningMessage('Not a draft comment.');
+				return;
+			}
+			if (!prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+				vscode.window.showWarningMessage('No active PR context.');
+				return;
+			}
+
+			const info = commentController.getUserDraftInfo(vsThread);
+			if (!info) {
+				vscode.window.showWarningMessage('Cannot read draft info.');
+				return;
+			}
+
+			const prId = activePrProvider._activePrForContext.pullRequestId;
+			try {
+				outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine}`);
+				await prService.createThread(prId, info.body, {
+					filePath: `/${info.filePath}`,
+					startLine: info.startLine,
+					startCol: info.startCol,
+					endLine: info.endLine,
+					endCol: info.endCol,
+				});
+				commentController.disposeUserDraft(vsThread);
+				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
+				activePrProvider.refresh();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[comments] Failed to post user draft: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to post comment: ${msg}`);
+			}
+		}),
+	);
+
+	// Post a user draft from the editing area's inline accept button
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.postUserDraftFromEdit', async (commentArg: unknown) => {
+			const comment = commentArg as vscode.Comment | undefined;
+			if (!comment) { return; }
+
+			const vsThread = commentController.findThreadForComment(comment);
+			if (!vsThread || !commentController.isUserDraft(vsThread)) {
+				vscode.window.showWarningMessage('Not a draft comment.');
+				return;
+			}
+			if (!prService || !activePrProvider?._activePrForContext?.pullRequestId) {
+				vscode.window.showWarningMessage('No active PR context.');
+				return;
+			}
+
+			const info = commentController.getUserDraftInfo(vsThread);
+			if (!info) {
+				vscode.window.showWarningMessage('Cannot read draft info.');
+				return;
+			}
+
+			const prId = activePrProvider._activePrForContext.pullRequestId;
+			// Read the (possibly edited) body from the comment argument
+			const editedBody = typeof comment.body === 'string'
+				? comment.body
+				: (comment.body as vscode.MarkdownString)?.value ?? '';
+			const body = editedBody.trim() || info.body;
+			if (!body.trim()) {
+				vscode.window.showWarningMessage('Comment cannot be empty.');
+				return;
+			}
+
+			try {
+				outputChannel.appendLine(`[comments] Posting edited user draft on ${info.filePath} L${info.startLine}`);
+				await prService.createThread(prId, body, {
+					filePath: `/${info.filePath}`,
+					startLine: info.startLine,
+					startCol: info.startCol,
+					endLine: info.endLine,
+					endCol: info.endCol,
+				});
+				commentController.disposeUserDraft(vsThread);
+				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
+				activePrProvider.refresh();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[comments] Failed to post user draft: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to post comment: ${msg}`);
+			}
+		}),
+	);
+
+	// Dismiss a user draft comment
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.dismissUserDraft', (threadOrItem: unknown) => {
+			let vsThread: vscode.CommentThread | undefined;
+			const arg = threadOrItem as any;
+			if (arg && 'canReply' in arg) {
+				vsThread = arg as vscode.CommentThread;
+			} else if (arg?.thread && 'canReply' in arg.thread) {
+				vsThread = arg.thread as vscode.CommentThread;
+			}
+			if (vsThread && commentController.isUserDraft(vsThread)) {
+				commentController.disposeUserDraft(vsThread);
+			}
+		}),
+	);
+
+	// Update a draft comment's text without posting
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.updateDraft', (commentArg: unknown) => {
+			const comment = commentArg as vscode.Comment | undefined;
+			if (!comment) { return; }
+
+			const vsThread = commentController.findThreadForComment(comment);
+			if (!vsThread) {
+				vscode.window.showWarningMessage('Cannot identify comment thread.');
+				return;
+			}
+
+			const editedBody = typeof comment.body === 'string'
+				? comment.body
+				: (comment.body as vscode.MarkdownString)?.value ?? '';
+			if (!editedBody.trim()) {
+				vscode.window.showWarningMessage('Draft cannot be empty.');
+				return;
+			}
+
+			if (commentController.isUserDraft(vsThread)) {
+				commentController.updateUserDraft(vsThread, editedBody);
+				outputChannel.appendLine(`[comments] Updated user draft text`);
+			} else if (commentController.hasReplyDraft(vsThread)) {
+				commentController.updateReplyDraft(vsThread, editedBody);
+				outputChannel.appendLine(`[comments] Updated reply draft text`);
+			} else if (commentController.isDraft(vsThread)) {
+				commentController.updateAiDraft(vsThread, editedBody);
+				outputChannel.appendLine(`[comments] Updated AI draft text`);
+			}
+		}),
+	);
+
+	// Save as draft — works for both new threads and replies on existing threads
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.saveAsDraft', async (reply: vscode.CommentReply) => {
+			if (!reply) { return; }
+			outputChannel.appendLine(`[comments] saveAsDraft ENTER: text=${reply.text?.substring(0, 60) ?? '(none)'}`);
+
+			const text = reply.text.trim();
+			if (!text) {
+				vscode.window.showWarningMessage('Comment cannot be empty.');
+				return;
+			}
+
+			const threadId = commentController.getThreadId(reply.thread);
+			if (threadId) {
+				// Existing AzDO thread → save reply as draft on this thread
+				outputChannel.appendLine(`[comments] saveAsDraft: existing thread ${threadId} → reply draft`);
+				commentController.saveReplyAsDraft(reply.thread, text);
+			} else {
+				// New thread from gutter → create as local user draft
+				outputChannel.appendLine(`[comments] saveAsDraft: new gutter thread → user draft`);
+				const uri = reply.thread.uri;
+				const range = reply.thread.range;
+				if (!range) {
+					vscode.window.showWarningMessage('Cannot determine line range for comment.');
+					reply.thread.dispose();
+					return;
+				}
+				commentController.createUserDraftThread(uri, range, text);
+				reply.thread.dispose();
 			}
 		}),
 	);

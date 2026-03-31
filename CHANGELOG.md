@@ -8,6 +8,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Draft comments** — write comments locally without posting to Azure DevOps, then publish them when ready.
+  - **Save as Draft button** — when writing a new comment or reply, a "Save as Draft" button appears alongside "Submit Comment". Drafts are saved locally and not posted to AzDO.
+  - **Draft visibility** — draft comments appear in the VS Code Comments panel and in the sidebar tree view under their respective files with a 📝 Draft label.
+  - **Edit and update drafts** — draft comments (including AI drafts) can be edited. An "Update Draft" button saves changes without posting.
+  - **Post or dismiss** — each draft has "Post" (cloud-upload) and "Dismiss" (close) buttons in the thread title bar.
+  - **Reply drafts** — save a reply as a draft on an existing AzDO thread.
+  - **AI draft support** — AI review drafts now also show in the sidebar tree view and support the "Update Draft" button.
 - **Toggle File / Diff view from comments** — when viewing a file opened from a PR comment, a new `$(git-compare)` button appears in the editor title bar to switch to the diff view for that file. From the diff view, clicking the button switches back to the file view. Cursor position is preserved across toggles. The button only appears for files belonging to the active pull request.
 
 ### Fixed
