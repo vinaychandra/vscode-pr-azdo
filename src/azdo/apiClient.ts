@@ -214,7 +214,7 @@ export class AzDoApiClient implements vscode.Disposable {
 }
 
 /** Check whether an error looks like an auth/authorization failure. */
-function isAuthError(err: unknown): boolean {
+export function isAuthError(err: unknown): boolean {
     if (!err) { return false; }
     const msg = String(err);
     // Standard HTTP codes

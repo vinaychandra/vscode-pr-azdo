@@ -609,3 +609,72 @@ suite('ActivePrTreeDataProvider — refreshThreadsOnly', () => {
         provider.dispose();
     });
 });
+
+suite('ActivePrTreeDataProvider — Auth Error Recovery', () => {
+    test('calls onAuthError when detectActivePr gets a TF400813 error', async () => {
+        let authErrorCalled = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    throw new Error('TF400813: The user is not authorized to access this resource.');
+                },
+            }),
+            createMockGitApi('feature'),
+            createMockLog(),
+            () => { authErrorCalled = true; },
+        );
+
+        await provider.detectActivePr();
+        assert.ok(authErrorCalled, 'onAuthError should be called for TF400813');
+        provider.dispose();
+    });
+
+    test('does not call onAuthError for non-auth errors in detectActivePr', async () => {
+        let authErrorCalled = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => { throw new Error('Network timeout'); },
+            }),
+            createMockGitApi('feature'),
+            createMockLog(),
+            () => { authErrorCalled = true; },
+        );
+
+        await provider.detectActivePr();
+        assert.ok(!authErrorCalled, 'onAuthError should not be called for non-auth errors');
+        provider.dispose();
+    });
+
+    test('calls onAuthError when ensureData gets an auth error', async () => {
+        let authErrorCalled = false;
+        const pr: GitPullRequest = {
+            pullRequestId: 42,
+            title: 'Test PR',
+            createdBy: { displayName: 'Owner' },
+            sourceRefName: 'refs/heads/feature',
+            targetRefName: 'refs/heads/main',
+            status: 1,
+        } as any;
+
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => pr,
+                getPrIterations: async () => {
+                    throw new Error('TF400813: The user is not authorized to access this resource.');
+                },
+            }),
+            createMockGitApi('feature'),
+            createMockLog(),
+            () => { authErrorCalled = true; },
+        );
+
+        await provider.detectActivePr();
+        // Trigger ensureData by expanding the tree
+        const roots = await provider.getChildren();
+        const prRoot = roots.find(r => r instanceof ActivePrRootItem);
+        if (prRoot) { await provider.getChildren(prRoot); }
+
+        assert.ok(authErrorCalled, 'onAuthError should be called for auth error in ensureData');
+        provider.dispose();
+    });
+});

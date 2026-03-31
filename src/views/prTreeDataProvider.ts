@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
-import type { AzDoApiClient } from '../azdo/apiClient';
+import { isAuthError, type AzDoApiClient } from '../azdo/apiClient';
 import { CategoryTreeItem, PullRequestTreeItem, VoteFilterItem, groupPrsByVote, type PrCategory } from './prTreeItems';
 
 export type PrTreeItem = CategoryTreeItem | PullRequestTreeItem | VoteFilterItem;
@@ -26,6 +26,7 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
         private readonly prService: PullRequestService,
         private readonly apiClient: AzDoApiClient,
         private readonly log: vscode.OutputChannel,
+        private readonly onAuthError?: () => void,
     ) { }
 
     /** Force a full refresh of all data. */
@@ -105,7 +106,11 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[tree] Error fetching ${category.category}: ${msg}`);
-            vscode.window.showErrorMessage(`Failed to load pull requests: ${msg}`);
+            if (isAuthError(err)) {
+                this.onAuthError?.();
+            } else {
+                vscode.window.showErrorMessage(`Failed to load pull requests: ${msg}`);
+            }
             return [];
         }
     }

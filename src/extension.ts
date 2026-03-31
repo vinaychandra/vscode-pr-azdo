@@ -111,6 +111,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	let activePrProviderSub: vscode.Disposable | undefined;
 	let activePrCommentSub: vscode.Disposable | undefined;
 	let activePrTreeView: vscode.TreeView<ActivePrTreeItem> | undefined;
+	let lastAutoRecoveryTime = 0;
 
 	// Inline comment controller — lives for the extension's lifetime
 	const commentController = new PrCommentController(outputChannel, gitApi, detector);
@@ -279,10 +280,23 @@ export async function activate(context: vscode.ExtensionContext) {
 			});
 
 			prService = new PullRequestService(apiClient, info);
-			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel);
+			const handleAuthError = () => {
+				const now = Date.now();
+				if (now - lastAutoRecoveryTime < 30_000) {
+					outputChannel.appendLine('[ext] Auth error detected but skipping auto-recovery (cooldown).');
+					return;
+				}
+				lastAutoRecoveryTime = now;
+				outputChannel.appendLine('[ext] Auth error detected — auto-clearing cache and rebuilding.');
+				void context.globalState.update(TENANT_CACHE_KEY, undefined);
+				apiClient?.resetConnection();
+				rebuildApiClient();
+				vscode.window.showInformationMessage('Azure DevOps PR: Re-authenticating after authorization error…');
+			};
+			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel, handleAuthError);
 			context.subscriptions.push(treeProvider);
 
-			activePrProvider = new ActivePrTreeDataProvider(prService, gitApi!, outputChannel);
+			activePrProvider = new ActivePrTreeDataProvider(prService, gitApi!, outputChannel, handleAuthError);
 			context.subscriptions.push(activePrProvider);
 
 			// Forward real provider's change events through stable proxy emitters

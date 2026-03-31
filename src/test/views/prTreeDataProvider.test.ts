@@ -196,4 +196,46 @@ suite('PrTreeDataProvider', () => {
         assert.strictEqual(children.length, 0); // should not throw
         provider.dispose();
     });
+
+    test('calls onAuthError callback on TF400813 error', async () => {
+        let authErrorCalled = false;
+        const mockService = {
+            getOpenPullRequests: async () => {
+                throw new Error('TF400813: The user is not authorized to access this resource.');
+            },
+            getMyPullRequests: async () => [],
+            getPullRequestsAwaitingMyReview: async () => [],
+        } as unknown as PullRequestService;
+
+        const provider = new PrTreeDataProvider(
+            mockService,
+            createMockApiClient(),
+            createMockLog(),
+            () => { authErrorCalled = true; },
+        );
+        const category = new CategoryTreeItem('allOpen', 'All Open', undefined);
+        await provider.getChildren(category);
+        assert.ok(authErrorCalled, 'onAuthError should be called for TF400813');
+        provider.dispose();
+    });
+
+    test('does not call onAuthError for non-auth errors', async () => {
+        let authErrorCalled = false;
+        const mockService = {
+            getOpenPullRequests: async () => { throw new Error('Network timeout'); },
+            getMyPullRequests: async () => [],
+            getPullRequestsAwaitingMyReview: async () => [],
+        } as unknown as PullRequestService;
+
+        const provider = new PrTreeDataProvider(
+            mockService,
+            createMockApiClient(),
+            createMockLog(),
+            () => { authErrorCalled = true; },
+        );
+        const category = new CategoryTreeItem('allOpen', 'All Open', undefined);
+        await provider.getChildren(category);
+        assert.ok(!authErrorCalled, 'onAuthError should not be called for non-auth errors');
+        provider.dispose();
+    });
 });

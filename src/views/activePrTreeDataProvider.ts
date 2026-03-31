@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestCommentThread, GitPullRequestIteration } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../azdo/prService';
+import { isAuthError } from '../azdo/apiClient';
 import type { API } from '../typings/git';
 import {
     ActivePrRootItem,
@@ -208,6 +209,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         private readonly prService: PullRequestService,
         private readonly gitApi: API,
         private readonly log: vscode.OutputChannel,
+        private readonly onAuthError?: () => void,
     ) {
         // Listen for branch changes in all known repos
         for (const repo of gitApi.repositories) {
@@ -250,6 +252,9 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error detecting PR: ${msg}`);
+            if (isAuthError(err)) {
+                this.onAuthError?.();
+            }
             this.setActivePr(undefined);
         }
     }
@@ -421,6 +426,9 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error loading data: ${msg}`);
+            if (isAuthError(err)) {
+                this.onAuthError?.();
+            }
             this._fileTree = this._fileTree ?? [];
             this._commits = this._commits ?? [];
             this._allThreads = this._allThreads ?? [];
