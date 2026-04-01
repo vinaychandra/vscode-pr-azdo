@@ -237,6 +237,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	const activePrProxyEmitter = new vscode.EventEmitter<void>();
 	context.subscriptions.push(activePrProxyEmitter);
 
+	// Suppress tree auto-expand during background operations (startup, silent auth)
+	// to prevent the extension panel from stealing focus.
+	let suppressAutoExpand = true;
+
 	function rebuildApiClient(): void {
 		outputChannel.appendLine('[ext] rebuildApiClient called');
 
@@ -360,8 +364,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				activePrProxyEmitter.fire();
 
-				// Auto-expand the tree when a new PR becomes active (only if authenticated)
-				if (prId && prId !== lastExpandedPrId && apiClient?.isConnected) {
+				// Auto-expand the tree when a new PR becomes active (only if authenticated
+				// and not during a background operation that would steal focus)
+				if (prId && prId !== lastExpandedPrId && apiClient?.isConnected && !suppressAutoExpand) {
 					lastExpandedPrId = prId;
 					// Delay slightly to let the tree render before expanding
 					setTimeout(() => {
@@ -525,6 +530,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Refresh active PR command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
+			suppressAutoExpand = false;
 			activePrProvider?.refresh();
 			gitContentProvider.clearCache();
 		}),
@@ -1594,6 +1600,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Checkout PR source branch
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.checkoutPullRequest', async (item: unknown) => {
+			suppressAutoExpand = false;
 			// item comes from the tree view inline button — it's a PullRequestTreeItem
 			const pr: GitPullRequest | undefined = (item as any)?.pr;
 			if (!pr?.sourceRefName) {
@@ -2099,6 +2106,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.signIn', async () => {
 			outputChannel.appendLine('[ext] signIn: user-initiated sign in…');
+			suppressAutoExpand = false;
 			if (!apiClient) {
 				vscode.window.showWarningMessage('Azure DevOps PR: No Azure DevOps remote detected.');
 				return;
@@ -2144,6 +2152,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.switchAccount', async () => {
 			outputChannel.appendLine('[ext] switchAccount: forcing new session…');
+			suppressAutoExpand = false;
 			// Pass the cached tenant ID so the forced session targets the correct
 			// Entra tenant — avoids a scope mismatch that would cause
 			// tryConnectSilently to fail after rebuild.

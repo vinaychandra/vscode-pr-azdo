@@ -40,11 +40,13 @@
       "azdo-pr": [
         {
           "id": "azdo-pr.activePr",
-          "name": "Active Pull Request"
+          "name": "Active Pull Request",
+          "visibility": "collapsed"
         },
         {
           "id": "azdo-pr.pullRequests",
-          "name": "Pull Requests"
+          "name": "Pull Requests",
+          "visibility": "collapsed"
         }
       ]
     },
