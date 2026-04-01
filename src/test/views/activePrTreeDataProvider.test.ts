@@ -29,6 +29,7 @@ function createMockPrService(overrides: Partial<PullRequestService> = {}): PullR
         getPrIterationChanges: async () => ({ changeEntries: [] }),
         getPrCommits: async () => [],
         getPrThreads: async () => [],
+        isConnected: true,
         ...overrides,
     } as unknown as PullRequestService;
 }
@@ -182,7 +183,7 @@ suite('ActivePrTreeDataProvider — Comment Filter', () => {
 });
 
 suite('ActivePrTreeDataProvider — getChildren with no active PR', () => {
-    test('returns empty when no active PR', async () => {
+    test('returns empty when no active PR and connected', async () => {
         const provider = new ActivePrTreeDataProvider(
             createMockPrService(),
             createMockGitApi(), // no branch → no PR
@@ -190,6 +191,167 @@ suite('ActivePrTreeDataProvider — getChildren with no active PR', () => {
         );
         const roots = await provider.getChildren();
         assert.strictEqual(roots.length, 0);
+        provider.dispose();
+    });
+
+    test('returns sign-in item when not connected', async () => {
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({ isConnected: false } as any),
+            createMockGitApi(),
+            createMockLog(),
+        );
+        const roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const item = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(item.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(item.command?.command, 'vscode-pr-azdo.signIn');
+        provider.dispose();
+    });
+});
+
+suite('ActivePrTreeDataProvider — detectActivePr when not connected', () => {
+    test('skips detection when not connected', async () => {
+        let findPrCalled = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                isConnected: false,
+                findPrForBranch: async () => { findPrCalled = true; return undefined; },
+            } as any),
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+        await provider.detectActivePr();
+        assert.ok(!findPrCalled, 'findPrForBranch should not be called when disconnected');
+        provider.dispose();
+    });
+});
+
+suite('ActivePrTreeDataProvider — auth lifecycle', () => {
+    const testPr: GitPullRequest = {
+        pullRequestId: 42,
+        title: 'Test PR',
+        createdBy: { displayName: 'Owner', id: 'owner-id' },
+        sourceRefName: 'refs/heads/feature',
+        targetRefName: 'refs/heads/main',
+        status: 1, // Active
+    } as any;
+
+    function createMutableService(connected: boolean) {
+        const svc = {
+            findPrForBranch: async () => testPr,
+            getPrIterations: async () => [{ id: 1 }],
+            getPrIterationChanges: async () => ({ changeEntries: [] }),
+            getPrCommits: async () => [],
+            getPrThreads: async () => [],
+            isConnected: connected,
+        };
+        return svc as unknown as PullRequestService;
+    }
+
+    test('sign-in item → connect → PR tree → expire → sign-in item again', async () => {
+        const svc = createMutableService(false);
+        const provider = new ActivePrTreeDataProvider(
+            svc,
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+
+        // 1. Initially not connected — sign-in item shown, detectActivePr skipped
+        let findCalled = false;
+        (svc as any).findPrForBranch = async () => { findCalled = true; return testPr; };
+        await provider.detectActivePr();
+        assert.ok(!findCalled, 'findPrForBranch should not be called when disconnected');
+
+        let roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const signInItem = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(signInItem.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(signInItem.command?.command, 'vscode-pr-azdo.signIn');
+
+        // 2. User signs in — simulate silent auth succeeded
+        (svc as any).isConnected = true;
+        findCalled = false;
+        await provider.detectActivePr();
+        assert.ok(findCalled, 'findPrForBranch should be called once connected');
+
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 2); // ReviewModeToggleItem + ActivePrRootItem
+        assert.ok(roots[1] instanceof ActivePrRootItem);
+
+        // 3. Token expires — simulate disconnect
+        (svc as any).isConnected = false;
+
+        // Branch change triggers detectActivePr — should be silently skipped
+        findCalled = false;
+        await provider.detectActivePr();
+        assert.ok(!findCalled, 'findPrForBranch should not be called after token expiry');
+
+        // After detectActivePr sets activePr to undefined, tree should show sign-in
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const reSignIn = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(reSignIn.label, 'Sign in to Azure DevOps');
+
+        // 4. User clicks sign-in again
+        (svc as any).isConnected = true;
+        await provider.detectActivePr();
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 2);
+        assert.ok(roots[1] instanceof ActivePrRootItem);
+
+        provider.dispose();
+    });
+
+    test('silent re-auth succeeds — no sign-in item shown', async () => {
+        // Start connected with a PR
+        const svc = createMutableService(true);
+        const provider = new ActivePrTreeDataProvider(
+            svc,
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+        await provider.detectActivePr();
+        let roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 2);
+
+        // Simulate: token expired but silent re-auth succeeded (isConnected stays true)
+        // In the real flow, handleAuthError calls tryConnectSilently which succeeds,
+        // so isConnected remains true and proxy emitters re-fire.
+        provider.refresh();
+        await provider.detectActivePr();
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 2, 'Should still show PR tree after silent re-auth');
+        assert.ok(roots[1] instanceof ActivePrRootItem);
+
+        provider.dispose();
+    });
+
+    test('silent re-auth fails — sign-in item replaces PR tree', async () => {
+        // Start connected with a PR
+        const svc = createMutableService(true);
+        const provider = new ActivePrTreeDataProvider(
+            svc,
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+        await provider.detectActivePr();
+        let roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 2);
+        assert.ok(roots[1] instanceof ActivePrRootItem);
+
+        // Simulate: token expired and silent re-auth also failed
+        // handleAuthError would call resetConnection → isConnected = false,
+        // then fire proxy emitters → getChildren re-queries
+        (svc as any).isConnected = false;
+        provider.refresh();
+        await provider.detectActivePr();
+
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const item = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(item.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(item.command?.command, 'vscode-pr-azdo.signIn');
+
         provider.dispose();
     });
 });

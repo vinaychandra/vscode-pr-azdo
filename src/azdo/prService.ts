@@ -12,6 +12,10 @@ export class PullRequestService {
         private readonly remoteInfo: AzDoRemoteInfo,
     ) { }
 
+    /** Whether the underlying API client has an active authenticated connection. */
+    get isConnected(): boolean {
+        return this.apiClient.isConnected;
+    }
     /** All active pull requests in the repository. */
     async getOpenPullRequests(): Promise<GitPullRequest[]> {
         const git = await this.apiClient.getGitApi();

@@ -187,6 +187,44 @@ export class AzDoApiClient implements vscode.Disposable {
         return userId;
     }
 
+    /** Whether the client currently holds a validated connection. */
+    get isConnected(): boolean {
+        return !!this._connection;
+    }
+
+    /**
+     * Attempt to establish a connection using only a cached/silent token.
+     * Never shows a login prompt. Returns `true` if a connection was
+     * established, `false` if no valid token is available.
+     */
+    async tryConnectSilently(): Promise<boolean> {
+        if (this._connection) { return true; }
+
+        this.log.appendLine('[api] Attempting silent connection…');
+        const token = await this.authProvider.getToken({ silent: true, tenantId: this._tenantId });
+        if (!token) {
+            this.log.appendLine('[api] No cached token available (silent mode).');
+            return false;
+        }
+
+        const handler = azdev.getBearerHandler(token);
+        const conn = new azdev.WebApi(this.remoteInfo.apiBaseUrl, handler);
+
+        try {
+            this._connectionData = await conn.connect();
+        } catch (err: unknown) {
+            if (isAuthError(err)) {
+                this.log.appendLine('[api] Silent connection failed (auth error) — skipping tenant discovery in silent mode.');
+                return false;
+            }
+            throw err;
+        }
+
+        this._connection = conn;
+        this.log.appendLine('[api] Silent connection established.');
+        return true;
+    }
+
     /**
      * Invalidate the cached connection so the next call re-authenticates.
      * Useful after a 401 or when the user signs out.

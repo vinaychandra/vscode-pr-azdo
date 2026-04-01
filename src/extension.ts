@@ -262,26 +262,41 @@ export async function activate(context: vscode.ExtensionContext) {
 			apiClient = new AzDoApiClient(authProvider, info, outputChannel, tenantCache);
 			context.subscriptions.push(apiClient);
 
-			// Fetch user ID early — needed to identify own comments for delete button.
-			// Don't await here to avoid blocking tree view setup; wire up comments after it resolves.
-			// On TenantMismatchError, show an actionable notification.
-			const userIdPromise = apiClient.getCurrentUserId().catch(err => {
-				if (err instanceof TenantMismatchError) {
-					outputChannel.appendLine(`[ext] Tenant mismatch: ${err.message}`);
-					void vscode.window.showErrorMessage(
-						`Authentication failed for Azure DevOps organization "${err.organization}". ` +
-						(err.discoveredTenantId
-							? `The organization requires tenant ${err.discoveredTenantId}, but your current session doesn't have access. `
-							: 'Your current session may be for the wrong Entra tenant. ') +
-						'This is common with multi-tenant Microsoft accounts.',
-						'Switch Account',
-					).then(action => {
-						if (action === 'Switch Account') {
-							void vscode.commands.executeCommand('vscode-pr-azdo.switchAccount');
-						}
-					});
+			// Try silent authentication — never prompts the user.
+			// If a cached token exists it will be reused; otherwise tree views
+			// will show a "Sign In" item and the user can authenticate on demand.
+			const userIdPromise = apiClient.tryConnectSilently().then(connected => {
+				if (!connected) {
+					outputChannel.appendLine('[ext] Silent auth unavailable — sign-in deferred until user action.');
+					// Fire so tree views render the "Sign In" item
+					proxyEmitter.fire();
+					activePrProxyEmitter.fire();
+					return undefined;
 				}
-				return undefined;
+				// Silent auth succeeded — kick off active PR detection now that
+				// we're connected (the initial detection was skipped because
+				// tryConnectSilently hadn't completed yet).
+				outputChannel.appendLine('[ext] Silent auth succeeded — triggering active PR detection.');
+				activePrProvider?.refresh();
+				proxyEmitter.fire();
+				return apiClient!.getCurrentUserId().catch(err => {
+					if (err instanceof TenantMismatchError) {
+						outputChannel.appendLine(`[ext] Tenant mismatch: ${err.message}`);
+						void vscode.window.showErrorMessage(
+							`Authentication failed for Azure DevOps organization "${err.organization}". ` +
+							(err.discoveredTenantId
+								? `The organization requires tenant ${err.discoveredTenantId}, but your current session doesn't have access. `
+								: 'Your current session may be for the wrong Entra tenant. ') +
+							'This is common with multi-tenant Microsoft accounts.',
+							'Switch Account',
+						).then(action => {
+							if (action === 'Switch Account') {
+								void vscode.commands.executeCommand('vscode-pr-azdo.switchAccount');
+							}
+						});
+					}
+					return undefined;
+				});
 			});
 
 			prService = new PullRequestService(apiClient, info);
@@ -292,11 +307,27 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 				lastAutoRecoveryTime = now;
-				outputChannel.appendLine('[ext] Auth error detected — auto-clearing cache and rebuilding.');
-				void context.globalState.update(TENANT_CACHE_KEY, undefined);
+				outputChannel.appendLine('[ext] Auth error detected — attempting silent re-auth…');
+				// Keep tenant cache — the org's tenant hasn't changed, only the token expired.
 				apiClient?.resetConnection();
-				rebuildApiClient();
-				vscode.window.showInformationMessage('Azure DevOps PR: Re-authenticating after authorization error…');
+
+				// Try to reconnect silently (VS Code may have refreshed the token).
+				// If that fails, just update the UI so "Sign In" items appear.
+				void apiClient?.tryConnectSilently().then(connected => {
+					if (connected) {
+						outputChannel.appendLine('[ext] Silent re-auth succeeded.');
+						// Re-fire so tree views refresh with real data
+						proxyEmitter.fire();
+						activePrProxyEmitter.fire();
+					} else {
+						outputChannel.appendLine('[ext] Silent re-auth failed — showing sign-in prompt in tree views.');
+						proxyEmitter.fire();
+						activePrProxyEmitter.fire();
+						vscode.window.showInformationMessage(
+							'Azure DevOps PR: Session expired. Click "Sign In" in the panel to re-authenticate.',
+						);
+					}
+				});
 			};
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel, handleAuthError);
 			context.subscriptions.push(treeProvider);
@@ -329,8 +360,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 				activePrProxyEmitter.fire();
 
-				// Auto-expand the tree when a new PR becomes active
-				if (prId && prId !== lastExpandedPrId) {
+				// Auto-expand the tree when a new PR becomes active (only if authenticated)
+				if (prId && prId !== lastExpandedPrId && apiClient?.isConnected) {
 					lastExpandedPrId = prId;
 					// Delay slightly to let the tree render before expanding
 					setTimeout(() => {
@@ -2063,19 +2094,48 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
-	// Sign-in command
+	// Sign-in command — triggers interactive login via full connection flow
+	// (including tenant discovery for multi-tenant orgs) and refreshes everything.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.signIn', async () => {
-			const token = await authProvider.getToken();
-			if (token) {
+			outputChannel.appendLine('[ext] signIn: user-initiated sign in…');
+			if (!apiClient) {
+				vscode.window.showWarningMessage('Azure DevOps PR: No Azure DevOps remote detected.');
+				return;
+			}
+			apiClient.resetConnection();
+			try {
+				// getCurrentUserId() → getConnection() → doConnect(), which
+				// handles tenant discovery and interactive prompts.
+				await apiClient.getCurrentUserId();
 				void vscode.commands.executeCommand(
 					'setContext', 'vscode-pr-azdo:isAuthenticated', true,
 				);
 				vscode.window.showInformationMessage('Azure DevOps PR: Signed in successfully.');
-				outputChannel.appendLine('[ext] Sign-in succeeded — refreshing tree');
+				outputChannel.appendLine('[ext] Sign-in succeeded — refreshing tree views');
 				treeProvider?.refresh();
-			} else {
-				vscode.window.showWarningMessage('Azure DevOps PR: Sign-in was cancelled or failed.');
+				activePrProvider?.refresh();
+				proxyEmitter.fire();
+				activePrProxyEmitter.fire();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[ext] signIn failed: ${msg}`);
+				if (err instanceof TenantMismatchError) {
+					void vscode.window.showErrorMessage(
+						`Authentication failed for organization "${err.organization}". ` +
+						(err.discoveredTenantId
+							? `The organization requires tenant ${err.discoveredTenantId}. `
+							: 'Your session may be for the wrong Entra tenant. ') +
+						'Try "Switch Account" to authenticate with a different account.',
+						'Switch Account',
+					).then(action => {
+						if (action === 'Switch Account') {
+							void vscode.commands.executeCommand('vscode-pr-azdo.switchAccount');
+						}
+					});
+				} else {
+					vscode.window.showWarningMessage('Azure DevOps PR: Sign-in was cancelled or failed.');
+				}
 			}
 		}),
 	);
@@ -2084,8 +2144,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.switchAccount', async () => {
 			outputChannel.appendLine('[ext] switchAccount: forcing new session…');
+			// Pass the cached tenant ID so the forced session targets the correct
+			// Entra tenant — avoids a scope mismatch that would cause
+			// tryConnectSilently to fail after rebuild.
+			const cachedTenantId = tenantCache.get(detector.currentRemoteInfo?.organization ?? '');
 			apiClient?.resetConnection();
-			const token = await authProvider.getToken({ forceNew: true });
+			const token = await authProvider.getToken({ forceNew: true, tenantId: cachedTenantId });
 			if (token) {
 				void vscode.commands.executeCommand(
 					'setContext', 'vscode-pr-azdo:isAuthenticated', true,

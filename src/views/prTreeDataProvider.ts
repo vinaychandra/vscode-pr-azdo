@@ -42,6 +42,13 @@ export class PrTreeDataProvider implements vscode.TreeDataProvider<PrTreeItem>, 
 
     async getChildren(element?: PrTreeItem): Promise<PrTreeItem[]> {
         if (!element) {
+            // If not authenticated, show a sign-in prompt instead of categories
+            if (!this.apiClient.isConnected) {
+                const signIn = new vscode.TreeItem('Sign in to Azure DevOps', vscode.TreeItemCollapsibleState.None);
+                signIn.iconPath = new vscode.ThemeIcon('sign-in');
+                signIn.command = { command: 'vscode-pr-azdo.signIn', title: 'Sign In' };
+                return [signIn as unknown as PrTreeItem];
+            }
             return this.getRootCategories();
         }
 

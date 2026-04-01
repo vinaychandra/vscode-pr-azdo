@@ -248,6 +248,13 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     /** Re-detect the active PR for the current branch and refresh the tree. */
     async detectActivePr(): Promise<void> {
+        // Skip detection when not authenticated — avoids triggering login prompts
+        if (!this.prService.isConnected) {
+            this.log.appendLine('[active-pr] Skipping PR detection (not authenticated).');
+            this.setActivePr(undefined);
+            return;
+        }
+
         const branchName = this.getCurrentBranchName();
         this.log.appendLine(`[active-pr] Current branch: ${branchName ?? '(detached/unknown)'}`);
 
@@ -345,6 +352,13 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     async getChildren(element?: ActivePrTreeItem): Promise<ActivePrTreeItem[]> {
         if (!this._activePr) {
+            // If not authenticated, show a sign-in prompt
+            if (!this.prService.isConnected) {
+                const signIn = new vscode.TreeItem('Sign in to Azure DevOps', vscode.TreeItemCollapsibleState.None);
+                signIn.iconPath = new vscode.ThemeIcon('sign-in');
+                signIn.command = { command: 'vscode-pr-azdo.signIn', title: 'Sign In' };
+                return [signIn as unknown as ActivePrTreeItem];
+            }
             return [];
         }
 

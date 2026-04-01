@@ -4,6 +4,22 @@ All notable changes to the "vscode-pr-azdo" extension will be documented in this
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Lazy authentication** — the extension no longer prompts for login on startup or during background operations. Authentication is deferred until the user explicitly needs it (e.g. clicking "Sign In", expanding a PR category, posting a comment). This eliminates disruptive login prompts in idle VS Code windows, especially when working across multiple projects and tenants.
+- **Silent token refresh** — when a token expires mid-session, the extension first attempts a silent refresh. If the silent refresh succeeds, the user sees no interruption. If it fails, tree views show a "Sign In" item instead of prompting immediately.
+
+### Added
+
+- **Sign In tree item** — when not authenticated, both the "Pull Requests" and "Active Pull Request" tree views show a clickable "Sign in to Azure DevOps" item that triggers interactive login on demand.
+
+### Fixed
+
+- **Multi-tenant Switch Account** — the "Switch Account" command now passes the cached Entra tenant ID when forcing a new session, preventing a scope mismatch that would require signing in twice on multi-tenant orgs.
+- **Active PR not detected after silent auth** — fixed a race condition where the active PR was not detected after silent authentication completed, because the initial detection ran before the connection was established.
+
 ## [0.0.10]
 
 ### Added

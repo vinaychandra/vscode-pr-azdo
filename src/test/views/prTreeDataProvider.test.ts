@@ -25,9 +25,10 @@ function createMockPrService(open: GitPullRequest[], mine: GitPullRequest[], rev
     } as unknown as PullRequestService;
 }
 
-function createMockApiClient(): AzDoApiClient {
+function createMockApiClient(connected = true): AzDoApiClient {
     return {
         getCurrentUserId: async () => 'user-123',
+        isConnected: connected,
     } as unknown as AzDoApiClient;
 }
 
@@ -236,6 +237,92 @@ suite('PrTreeDataProvider', () => {
         const category = new CategoryTreeItem('allOpen', 'All Open', undefined);
         await provider.getChildren(category);
         assert.ok(!authErrorCalled, 'onAuthError should not be called for non-auth errors');
+        provider.dispose();
+    });
+
+    test('shows sign-in item when not connected', async () => {
+        const provider = new PrTreeDataProvider(
+            createMockPrService([], [], []),
+            createMockApiClient(false),
+            createMockLog(),
+        );
+        const roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const item = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(item.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(item.command?.command, 'vscode-pr-azdo.signIn');
+        provider.dispose();
+    });
+
+    test('shows categories when connected', async () => {
+        const provider = new PrTreeDataProvider(
+            createMockPrService([], [], []),
+            createMockApiClient(true),
+            createMockLog(),
+        );
+        const roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 3);
+        assert.ok(roots[0] instanceof CategoryTreeItem);
+        provider.dispose();
+    });
+});
+
+suite('PrTreeDataProvider — auth lifecycle', () => {
+    const pr1 = makePr(1, 'PR One');
+
+    function createMutableApiClient() {
+        const client = {
+            getCurrentUserId: async () => 'user-123',
+            isConnected: false,
+        };
+        return client as unknown as AzDoApiClient;
+    }
+
+    test('sign-in item → connect → categories → expire → sign-in item again', async () => {
+        const client = createMutableApiClient();
+        const provider = new PrTreeDataProvider(
+            createMockPrService([pr1], [], []),
+            client,
+            createMockLog(),
+        );
+
+        // 1. Initially not connected — should show sign-in item
+        let roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const signInItem = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(signInItem.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(signInItem.command?.command, 'vscode-pr-azdo.signIn');
+
+        // 2. User signs in — simulate connection established
+        (client as any).isConnected = true;
+        provider.refresh();
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 3);
+        assert.ok(roots[0] instanceof CategoryTreeItem);
+
+        // Verify expanding a category returns real PR data
+        const category = new CategoryTreeItem('allOpen', 'All Open', undefined);
+        const prs = await provider.getChildren(category);
+        assert.strictEqual(prs.length, 1);
+        assert.ok(prs[0] instanceof PullRequestTreeItem);
+        assert.strictEqual((prs[0] as PullRequestTreeItem).pr.pullRequestId, 1);
+
+        // 3. Token expires — simulate disconnection
+        (client as any).isConnected = false;
+        provider.refresh();
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 1);
+        const reSignIn = roots[0] as unknown as vscode.TreeItem;
+        assert.strictEqual(reSignIn.label, 'Sign in to Azure DevOps');
+        assert.strictEqual(reSignIn.command?.command, 'vscode-pr-azdo.signIn');
+
+        // 4. User signs in again
+        (client as any).isConnected = true;
+        provider.refresh();
+        roots = await provider.getChildren();
+        assert.strictEqual(roots.length, 3);
+        assert.ok(roots[0] instanceof CategoryTreeItem);
+
         provider.dispose();
     });
 });
