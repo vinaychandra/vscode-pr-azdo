@@ -39,7 +39,6 @@ export class RepositoryDetector implements vscode.Disposable {
                 // Also listen for state changes within the repo (remotes may arrive late)
                 this._disposables.push(
                     repo.state.onDidChange(() => {
-                        this.log.appendLine(`[detector] repo state changed: ${repo.rootUri.fsPath} — remotes: ${repo.state.remotes.length}`);
                         this.scan('onDidChange (repo state)');
                     }),
                 );
@@ -54,34 +53,46 @@ export class RepositoryDetector implements vscode.Disposable {
         for (const repo of gitApi.repositories) {
             this._disposables.push(
                 repo.state.onDidChange(() => {
-                    this.log.appendLine(`[detector] repo state changed: ${repo.rootUri.fsPath} — remotes: ${repo.state.remotes.length}`);
                     this.scan('onDidChange (repo state)');
                 }),
             );
         }
     }
 
-    /** Scan all known repositories for the first AzDo remote. */
+    /**
+     * Scan all known repositories for the first AzDo remote.
+     *
+     * VS Code's git extension polls `repo.state.onDidChange` frequently (~every
+     * 10–15s). To avoid noisy logs we buffer the verbose per-repo / per-remote
+     * trace and only emit it when the detection result actually changed. On a
+     * no-op scan (the common case), nothing is logged.
+     */
     private scan(trigger: string): void {
-        this.log.appendLine(`[detector] scan triggered by: ${trigger}`);
-        const info = this.findFirstAzDoRemote();
-        const changed =
-            info?.remoteUrl !== this._currentRemoteInfo?.remoteUrl;
+        const buffer: string[] = [];
+        const traceLog = (line: string) => buffer.push(line);
+
+        const info = this.findFirstAzDoRemote(traceLog);
+        const changed = info?.remoteUrl !== this._currentRemoteInfo?.remoteUrl;
 
         this._currentRemoteInfo = info;
-        if (changed) {
-            this.log.appendLine(`[detector] detection changed → ${info ? `${info.organization}/${info.project}/${info.repositoryName}` : '(none)'}`);
-            this._onDidChange.fire(info);
-        } else {
-            this.log.appendLine(`[detector] no change from previous scan.`);
+        if (!changed) {
+            return;
         }
+
+        // Detection changed — emit the buffered trace plus the result.
+        this.log.appendLine(`[detector] scan triggered by: ${trigger}`);
+        for (const line of buffer) {
+            this.log.appendLine(line);
+        }
+        this.log.appendLine(`[detector] detection changed → ${info ? `${info.organization}/${info.project}/${info.repositoryName}` : '(none)'}`);
+        this._onDidChange.fire(info);
     }
 
-    private findFirstAzDoRemote(): AzDoRemoteInfo | undefined {
-        this.log.appendLine(`[detector] scanning ${this.gitApi.repositories.length} repo(s)…`);
+    private findFirstAzDoRemote(traceLog: (line: string) => void): AzDoRemoteInfo | undefined {
+        traceLog(`[detector] scanning ${this.gitApi.repositories.length} repo(s)…`);
         for (const repo of this.gitApi.repositories) {
-            this.log.appendLine(`[detector]   repo: ${repo.rootUri.fsPath}`);
-            const info = this.detectInRepository(repo);
+            traceLog(`[detector]   repo: ${repo.rootUri.fsPath}`);
+            const info = this.detectInRepository(repo, traceLog);
             if (info) {
                 return info;
             }
@@ -89,21 +100,21 @@ export class RepositoryDetector implements vscode.Disposable {
         return undefined;
     }
 
-    private detectInRepository(repo: Repository): AzDoRemoteInfo | undefined {
-        this.log.appendLine(`[detector]   remotes (${repo.state.remotes.length}):`);
+    private detectInRepository(repo: Repository, traceLog: (line: string) => void): AzDoRemoteInfo | undefined {
+        traceLog(`[detector]   remotes (${repo.state.remotes.length}):`);
         for (const remote of repo.state.remotes) {
             const url = remote.fetchUrl ?? remote.pushUrl;
-            this.log.appendLine(`[detector]     ${remote.name}: fetchUrl=${remote.fetchUrl ?? '(none)'}, pushUrl=${remote.pushUrl ?? '(none)'}`);
+            traceLog(`[detector]     ${remote.name}: fetchUrl=${remote.fetchUrl ?? '(none)'}, pushUrl=${remote.pushUrl ?? '(none)'}`);
             if (!url) {
-                this.log.appendLine(`[detector]     → skipped (no URL)`);
+                traceLog(`[detector]     → skipped (no URL)`);
                 continue;
             }
             const parsed = parseAzDoRemote(url, remote.name);
             if (parsed) {
-                this.log.appendLine(`[detector]     → MATCH: ${parsed.organization}/${parsed.project}/${parsed.repositoryName}`);
+                traceLog(`[detector]     → MATCH: ${parsed.organization}/${parsed.project}/${parsed.repositoryName}`);
                 return { ...parsed, repository: repo };
             } else {
-                this.log.appendLine(`[detector]     → not an AzDO remote`);
+                traceLog(`[detector]     → not an AzDO remote`);
             }
         }
         return undefined;

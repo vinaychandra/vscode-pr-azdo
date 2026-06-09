@@ -37,6 +37,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private readonly _disposables: vscode.Disposable[] = [];
 
     private _activePr: GitPullRequest | undefined;
+    /** Branch name observed at the last detectActivePr run; used to skip work on identical state changes. */
+    private _lastDetectedBranch: string | undefined;
     private _fileTree: (FolderItem | FileChangeItem)[] | undefined;
     private _commits: GitCommitRef[] | undefined;
     /** All user-visible threads (cached from API, never cleared by filter change). */
@@ -247,6 +249,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private subscribeToBranchChanges(repo: import('../typings/git').Repository): void {
         this._disposables.push(
             repo.state.onDidChange(() => {
+                // VS Code's git extension fires onDidChange on every poll (~10–15s)
+                // and on any working-tree/index change. Most of those are not
+                // branch changes, so skip the AzDO API call unless the current
+                // branch differs from the last detected one.
+                const current = this.getCurrentBranchName();
+                if (current === this._lastDetectedBranch) {
+                    return;
+                }
                 void this.detectActivePr();
             }),
         );
@@ -257,12 +267,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         // Skip detection when not authenticated — avoids triggering login prompts
         if (!this.prService.isConnected) {
             this.log.appendLine('[active-pr] Skipping PR detection (not authenticated).');
+            this._lastDetectedBranch = undefined;
             this.setActivePr(undefined);
             return;
         }
 
         const branchName = this.getCurrentBranchName();
         this.log.appendLine(`[active-pr] Current branch: ${branchName ?? '(detached/unknown)'}`);
+        this._lastDetectedBranch = branchName;
 
         if (!branchName) {
             this.setActivePr(undefined);
@@ -294,6 +306,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._iterations = undefined;
         this._changeTypeMap.clear();
         this._activePr = undefined;
+        this._lastDetectedBranch = undefined;
         void this.detectActivePr();
     }
 

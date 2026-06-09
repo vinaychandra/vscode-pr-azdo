@@ -1025,3 +1025,126 @@ suite('ActivePrTreeDataProvider — delete entry shape', () => {
         provider.dispose();
     });
 });
+
+// --- Branch-change gating ---
+// VS Code's git extension fires repo.state.onDidChange every ~10–15s (polling)
+// and on any working-tree / index change. We must NOT re-run findPrForBranch
+// on every such event — only when the branch name actually changed.
+suite('ActivePrTreeDataProvider — branch-change gating', () => {
+    /**
+     * Build a repo+gitApi pair with a mutable HEAD and a manually fireable
+     * onDidChange event, so tests can simulate the VS Code git extension
+     * notifying about repo state changes.
+     */
+    function makeMutableGitApi(initialBranch?: string) {
+        const stateEmitter = new vscode.EventEmitter<void>();
+        const head: { name: string | undefined } = { name: initialBranch };
+        const state = {
+            HEAD: head,
+            onDidChange: stateEmitter.event,
+        } as any;
+        const repo = { state } as any;
+        const api = {
+            repositories: [repo],
+            onDidOpenRepository: new vscode.EventEmitter<any>().event,
+        } as unknown as API;
+        return {
+            api,
+            setBranch(name: string | undefined) { head.name = name; },
+            fireStateChange() { stateEmitter.fire(); },
+            dispose() { stateEmitter.dispose(); },
+        };
+    }
+
+    test('skips findPrForBranch when state-change event fires with same branch', async () => {
+        let findCalls = 0;
+        const harness = makeMutableGitApi('feature/abc');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    findCalls++;
+                    return undefined;
+                },
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        // Wait for initial detectActivePr (kicked off in the constructor).
+        await new Promise(r => setTimeout(r, 0));
+        const callsAfterInit = findCalls;
+        assert.ok(callsAfterInit >= 1, 'initial detection should call findPrForBranch');
+
+        // Fire several state-change events without changing the branch.
+        harness.fireStateChange();
+        harness.fireStateChange();
+        harness.fireStateChange();
+        await new Promise(r => setTimeout(r, 0));
+
+        assert.strictEqual(findCalls, callsAfterInit, 'findPrForBranch should NOT be re-called when branch is unchanged');
+
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('calls findPrForBranch again when the branch actually changes', async () => {
+        let findCalls = 0;
+        const harness = makeMutableGitApi('feature/abc');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    findCalls++;
+                    return undefined;
+                },
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        await new Promise(r => setTimeout(r, 0));
+        const callsAfterInit = findCalls;
+
+        // Branch changed → detection must re-run.
+        harness.setBranch('feature/xyz');
+        harness.fireStateChange();
+        await new Promise(r => setTimeout(r, 0));
+        assert.strictEqual(findCalls, callsAfterInit + 1, 'findPrForBranch should be re-called when branch changes');
+
+        // Same new branch fires another state change → no extra call.
+        harness.fireStateChange();
+        await new Promise(r => setTimeout(r, 0));
+        assert.strictEqual(findCalls, callsAfterInit + 1, 'findPrForBranch should not be called again on a no-op state change');
+
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('refresh() resets gating so the next state-change re-detects even on same branch', async () => {
+        let findCalls = 0;
+        const harness = makeMutableGitApi('feature/abc');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    findCalls++;
+                    return undefined;
+                },
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        await new Promise(r => setTimeout(r, 0));
+
+        // Idle state change — gated.
+        harness.fireStateChange();
+        await new Promise(r => setTimeout(r, 0));
+        const beforeRefresh = findCalls;
+
+        provider.refresh();
+        await new Promise(r => setTimeout(r, 0));
+        assert.strictEqual(findCalls, beforeRefresh + 1, 'refresh() should force a re-detection');
+
+        provider.dispose();
+        harness.dispose();
+    });
+});
