@@ -3,19 +3,7 @@
 All notable changes to the "vscode-pr-azdo" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
-## [Unreleased]
 
-### Added
-
-- **Deleted files in the Active PR view** — files removed in a pull request now appear in the Files tree with a red trash-style icon and a "Delete" badge. Clicking a deleted file opens its old content (from the target branch) as a read-only editor, so you can read what was removed and comment on it directly. Added/renamed files also get themed icons (`diff-added` green / `diff-renamed`).
-- **Comments on deleted files** — existing Azure DevOps comments on deleted files now render at their original line on the gutter, and you can post new comments by clicking the `+` gutter icon. New comments are posted as left-side threads (`leftFileStart`/`leftFileEnd`) so they anchor correctly on AzDO.
-
-### Fixed
-
-- **Deleted files were missing from the tree** — Azure DevOps returns deleted file paths on the top-level `originalPath` field instead of `item.path` (which is `null` for deletes). The tree builder and change-type map now read both, so deletes appear correctly.
-- **Refresh now fetches from remote** — both the Pull Requests and Active PR refresh buttons now run `git fetch` before re-querying Azure DevOps, so remote-tracking branches (and therefore diffs against `origin/main`) reflect the latest server state.
-- **Checkout now fast-forwards the PR branch** — when checking out a PR branch that already exists locally but is behind its upstream (e.g. teammate pushed new commits), the extension now fast-forwards the local branch instead of leaving you on a stale revision. If the branch has diverged from the remote (force-push + local commits), you're prompted to either reset to the remote or keep the local copy.
-- **Idle log spam and wasted API calls** — VS Code's git extension fires `repo.state.onDidChange` every ~10–15s while polling. The extension no longer re-queries `findPrForBranch` on those fires when the branch hasn't changed, and the repository detector no longer logs verbose per-remote trace lines unless the detection result actually changes.
 ## [0.0.12]
 
 ### Added
@@ -26,6 +14,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Fixed
 
 - **Delete change entries were silently dropped** — Azure DevOps returns deletes with `item.path = null` and the path on a top-level `originalPath` field; the parser was only reading `item.path`, so deleted files were missing from the tree entirely. A new shared `getChangePath` helper handles both shapes.
+- **Refresh now fetches from remote** — both the Pull Requests and Active PR refresh buttons run `git fetch` before re-querying Azure DevOps, so remote-tracking branches (and therefore diffs against `origin/main`) reflect the latest server state.
+- **Checkout now fast-forwards the PR branch** — when checking out a PR branch that already exists locally but is behind its upstream (e.g. a teammate pushed new commits), the extension now fast-forwards the local branch instead of leaving you on a stale revision. If the branch has diverged from the remote (force-push + local commits), you're prompted to either reset to the remote or keep the local copy.
+- **Idle log spam and wasted API calls** — VS Code's git extension fires `repo.state.onDidChange` every ~10–15s while polling. The extension no longer re-queries `findPrForBranch` on those fires when the branch hasn't changed, and the repository detector no longer logs verbose per-remote trace lines unless the detection result actually changes.
 
 ## [0.0.11]
 
