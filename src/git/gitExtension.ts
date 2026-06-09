@@ -152,3 +152,77 @@ export function gitStash(repoRoot: string, message?: string): Promise<void> {
         });
     });
 }
+
+/**
+ * Return ahead/behind counts for a branch relative to its upstream.
+ * Uses `git rev-list --left-right --count <branch>...<branch>@{upstream}`.
+ * Returns `undefined` if the branch has no configured upstream.
+ */
+export function getBranchAheadBehind(repoRoot: string, branchName: string): Promise<{ ahead: number; behind: number } | undefined> {
+    return new Promise((resolve) => {
+        execFile(
+            'git',
+            ['rev-list', '--left-right', '--count', `${branchName}...${branchName}@{upstream}`],
+            { cwd: repoRoot },
+            (err, stdout) => {
+                if (err) {
+                    resolve(undefined);
+                    return;
+                }
+                const parts = stdout.trim().split(/\s+/);
+                const ahead = Number.parseInt(parts[0] ?? '0', 10);
+                const behind = Number.parseInt(parts[1] ?? '0', 10);
+                if (Number.isNaN(ahead) || Number.isNaN(behind)) {
+                    resolve(undefined);
+                    return;
+                }
+                resolve({ ahead, behind });
+            },
+        );
+    });
+}
+
+/**
+ * Fast-forward the currently checked-out branch to its upstream.
+ * Runs `git merge --ff-only <branch>@{upstream}` in the repo root.
+ * Rejects with the git stderr if a fast-forward is not possible (e.g. local
+ * has diverged from the upstream because of a force-push).
+ */
+export function fastForwardToUpstream(repoRoot: string, branchName: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        execFile(
+            'git',
+            ['merge', '--ff-only', `${branchName}@{upstream}`],
+            { cwd: repoRoot },
+            (err, _stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr.trim() || err.message));
+                } else {
+                    resolve();
+                }
+            },
+        );
+    });
+}
+
+/**
+ * Hard-reset the currently checked-out branch to its upstream.
+ * Runs `git reset --hard <branch>@{upstream}`. Destructive — discards any
+ * local commits and uncommitted changes on the branch.
+ */
+export function resetBranchToUpstream(repoRoot: string, branchName: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        execFile(
+            'git',
+            ['reset', '--hard', `${branchName}@{upstream}`],
+            { cwd: repoRoot },
+            (err, _stdout, stderr) => {
+                if (err) {
+                    reject(new Error(stderr.trim() || err.message));
+                } else {
+                    resolve();
+                }
+            },
+        );
+    });
+}

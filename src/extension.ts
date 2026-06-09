@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitAPI, getActiveRepository, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote } from './git/gitExtension';
+import { getGitAPI, getActiveRepository, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote, getBranchAheadBehind, fastForwardToUpstream, resetBranchToUpstream } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient, TenantMismatchError } from './azdo/apiClient';
@@ -166,6 +166,55 @@ export async function activate(context: vscode.ExtensionContext) {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			outputChannel.appendLine(`[auto-delete] Failed to delete "${previousBranch}": ${msg}`);
+		}
+	}
+
+	/**
+	 * After checking out a branch, bring it up to date with its upstream.
+	 *  - Up to date or ahead-only: no-op.
+	 *  - Behind, not diverged: fast-forward silently.
+	 *  - Diverged (behind > 0 AND ahead > 0): prompt the user. Default is to
+	 *    leave the branch as-is so we never silently destroy local commits.
+	 */
+	async function syncBranchWithUpstream(repoRoot: string, branchName: string): Promise<void> {
+		const counts = await getBranchAheadBehind(repoRoot, branchName);
+		if (!counts) {
+			outputChannel.appendLine(`[sync] "${branchName}" has no upstream — skipping fast-forward`);
+			return;
+		}
+		outputChannel.appendLine(`[sync] "${branchName}" is ahead ${counts.ahead}, behind ${counts.behind}`);
+		if (counts.behind === 0) {
+			return;
+		}
+		if (counts.ahead === 0) {
+			try {
+				await fastForwardToUpstream(repoRoot, branchName);
+				outputChannel.appendLine(`[sync] Fast-forwarded "${branchName}" by ${counts.behind} commit(s)`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[sync] Fast-forward failed: ${msg}`);
+				vscode.window.showWarningMessage(`Could not fast-forward "${branchName}" to remote: ${msg}`);
+			}
+			return;
+		}
+		// Diverged — local has commits the remote doesn't, and vice versa.
+		const choice = await vscode.window.showWarningMessage(
+			`Local "${branchName}" has diverged from origin (ahead ${counts.ahead}, behind ${counts.behind}). The PR branch was likely force-pushed.`,
+			{ modal: false },
+			'Reset to remote (discards local commits)',
+			'Keep local',
+		);
+		if (choice === 'Reset to remote (discards local commits)') {
+			try {
+				await resetBranchToUpstream(repoRoot, branchName);
+				outputChannel.appendLine(`[sync] Hard-reset "${branchName}" to upstream`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[sync] Reset failed: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to reset "${branchName}" to remote: ${msg}`);
+			}
+		} else {
+			outputChannel.appendLine(`[sync] User chose to keep local "${branchName}"`);
 		}
 	}
 
@@ -474,7 +523,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Refresh command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.refreshPullRequests', () => {
+		vscode.commands.registerCommand('vscode-pr-azdo.refreshPullRequests', async () => {
+			const repo = getActiveRepository(gitApi, detector);
+			if (repo) {
+				try {
+					await vscode.window.withProgress(
+						{ location: vscode.ProgressLocation.Window, title: 'Fetching from origin…' },
+						async () => { await repo.fetch(); },
+					);
+					outputChannel.appendLine('[refresh] git fetch completed');
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[refresh] git fetch failed (continuing with API refresh): ${msg}`);
+				}
+			}
 			treeProvider?.refresh();
 		}),
 	);
@@ -533,8 +595,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Refresh active PR command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', () => {
+		vscode.commands.registerCommand('vscode-pr-azdo.refreshActivePr', async () => {
 			suppressAutoExpand = false;
+			const repo = getActiveRepository(gitApi, detector);
+			if (repo) {
+				try {
+					await vscode.window.withProgress(
+						{ location: vscode.ProgressLocation.Window, title: 'Fetching from origin…' },
+						async () => { await repo.fetch(); },
+					);
+					outputChannel.appendLine('[refresh] git fetch completed');
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[refresh] git fetch failed (continuing with API refresh): ${msg}`);
+				}
+			}
 			activePrProvider?.refresh();
 			gitContentProvider.clearCache();
 		}),
@@ -1692,6 +1767,7 @@ export async function activate(context: vscode.ExtensionContext) {
 							);
 							outputChannel.appendLine(`[checkout] Stash + checkout succeeded for ${branchName}`);
 							trackCheckedOutBranch(branchName);
+							await syncBranchWithUpstream(repo.rootUri.fsPath, branchName);
 							await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
 							vscode.window.showInformationMessage(
 								`Checked out \`${branchName}\`. Your changes were stashed — use \`git stash pop\` to restore them.`,
@@ -1726,6 +1802,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				);
 				outputChannel.appendLine(`[checkout] Successfully checked out ${branchName}`);
 				trackCheckedOutBranch(branchName);
+				await syncBranchWithUpstream(repo.rootUri.fsPath, branchName);
 				await autoDeletePreviousBranch(repo.rootUri.fsPath, previousBranch);
 				// Enable review mode by default when checking out a PR branch
 				if (!reviewMode) {
