@@ -3,6 +3,26 @@
 All notable changes to the "vscode-pr-azdo" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [Unreleased]
+
+### Added
+
+- **Deleted files in the Active PR view** — files removed in a pull request now appear in the Files tree with a red trash-style icon and a "Delete" badge. Clicking a deleted file opens its old content (from the target branch) as a read-only editor, so you can read what was removed and comment on it directly. Added/renamed files also get themed icons (`diff-added` green / `diff-renamed`).
+- **Comments on deleted files** — existing Azure DevOps comments on deleted files now render at their original line on the gutter, and you can post new comments by clicking the `+` gutter icon. New comments are posted as left-side threads (`leftFileStart`/`leftFileEnd`) so they anchor correctly on AzDO.
+
+### Fixed
+
+- **Deleted files were missing from the tree** — Azure DevOps returns deleted file paths on the top-level `originalPath` field instead of `item.path` (which is `null` for deletes). The tree builder and change-type map now read both, so deletes appear correctly.
+## [0.0.12]
+
+### Added
+
+- **Deleted files in the Active PR view** — files removed in the pull request now appear in the Files tree alongside additions and edits, with a red `diff-removed` icon and a "Delete" label. Added files use a green `diff-added` icon; renames use `diff-renamed`. Clicking a deleted file opens the original content from the target branch in a read-only editor.
+- **Comments on deleted files** — existing Azure DevOps comments on deleted files now render inline at their original lines, and you can create new comments via the gutter `+` just like on edited files. Drafts and replies on deleted files are anchored to the correct side of the PR (`leftFileStart`) when posted to Azure DevOps.
+
+### Fixed
+
+- **Delete change entries were silently dropped** — Azure DevOps returns deletes with `item.path = null` and the path on a top-level `originalPath` field; the parser was only reading `item.path`, so deleted files were missing from the tree entirely. A new shared `getChangePath` helper handles both shapes.
 
 ## [0.0.11]
 

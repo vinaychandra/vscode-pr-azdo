@@ -119,11 +119,18 @@ export class PullRequestService {
         );
     }
 
-    /** Create a new comment thread on a file (or PR-level if no threadContext). */
+    /**
+     * Create a new comment thread on a file (or PR-level if no threadContext).
+     *
+     * @param threadContext.side  Which side of the diff the comment is anchored to.
+     *                            'right' (default) for added/edited content,
+     *                            'left' for content that exists only on the target
+     *                            branch (e.g. deleted files or removed lines).
+     */
     async createThread(
         pullRequestId: number,
         content: string,
-        threadContext?: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number },
+        threadContext?: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side?: 'left' | 'right' },
     ): Promise<GitPullRequestCommentThread> {
         const git = await this.apiClient.getGitApi();
         const thread: GitPullRequestCommentThread = {
@@ -131,10 +138,15 @@ export class PullRequestService {
             status: CommentThreadStatus.Active,
         };
         if (threadContext) {
+            const position = {
+                start: { line: threadContext.startLine, offset: threadContext.startCol },
+                end: { line: threadContext.endLine, offset: threadContext.endCol },
+            };
             thread.threadContext = {
                 filePath: threadContext.filePath,
-                rightFileStart: { line: threadContext.startLine, offset: threadContext.startCol },
-                rightFileEnd: { line: threadContext.endLine, offset: threadContext.endCol },
+                ...(threadContext.side === 'left'
+                    ? { leftFileStart: position.start, leftFileEnd: position.end }
+                    : { rightFileStart: position.start, rightFileEnd: position.end }),
             };
         }
         return git.createThread(

@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import type { GitPullRequestCommentThread, Comment as AzDoComment, CommentTrackingCriteria } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentType, CommentThreadStatus, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
 import type { PullRequestService } from '../azdo/prService';
-import { GIT_CONTENT_SCHEME } from './gitRefContentProvider';
+import { GIT_CONTENT_SCHEME, buildGitRefUri } from './gitRefContentProvider';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
@@ -34,7 +34,7 @@ export class PrCommentController implements vscode.Disposable {
     private _userDraftThreads: vscode.CommentThread[] = [];
 
     /** Position metadata for user draft threads (full range info for accurate AzDO posting). */
-    private _userDraftPositions = new Map<vscode.CommentThread, { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number }>();
+    private _userDraftPositions = new Map<vscode.CommentThread, { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side: 'left' | 'right' }>();
 
     /** Map VS Code thread → AzDO thread metadata for API calls. */
     private _threadMetaMap = new Map<vscode.CommentThread, ThreadMeta>();
@@ -47,6 +47,12 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Set of file paths (relative) that belong to the active PR. */
     private _prFilePaths = new Set<string>();
+
+    /** Map of repo-relative path → AzDO change type (bitmask), used to detect deleted files. */
+    private _changeTypes = new Map<string, number>();
+
+    /** Git ref for the target branch (e.g. 'origin/main'); used to anchor comments on deleted files. */
+    private _targetRef: string | undefined;
 
     private _prService: PullRequestService | undefined;
     private _prId: number | undefined;
@@ -122,16 +128,31 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     /** Set the PR context for write operations. */
-    setPrContext(prService: PullRequestService | undefined, prId: number | undefined, prFilePaths?: string[], currentUserId?: string): void {
+    setPrContext(
+        prService: PullRequestService | undefined,
+        prId: number | undefined,
+        prFilePaths?: string[],
+        currentUserId?: string,
+        changeTypes?: ReadonlyMap<string, number>,
+        targetRef?: string,
+    ): void {
         this._prService = prService;
         this._prId = prId;
         this._prFilePaths = new Set(prFilePaths ?? []);
         this._currentUserId = currentUserId;
-        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}]`);
+        this._changeTypes = changeTypes ? new Map(changeTypes) : new Map();
+        this._targetRef = targetRef;
+        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}`);
 
         // Re-assign the commenting range provider so VS Code re-queries
         // provideCommentingRanges for all already-open editors.
         this.applyCommentingRangeProvider();
+    }
+
+    /** Whether the given repo-relative file path is a Delete in the active PR. */
+    private isDeletedFile(relativePath: string): boolean {
+        const ct = this._changeTypes.get(relativePath);
+        return ct !== undefined && (ct & VersionControlChangeType.Delete) !== 0;
     }
 
     /**
@@ -223,12 +244,18 @@ export class PrCommentController implements vscode.Disposable {
         const endLine = range.end.line + 1;
         const endCol = range.end.character + 1;
 
-        this.log.appendLine(`[comments] Creating new thread on ${filePath} L${startLine}:${startCol}-L${endLine}:${endCol}`);
+        // Deleted files (and any other left-side-of-diff content) need to be
+        // anchored to leftFileStart/End, not the default rightFileStart/End.
+        const side: 'left' | 'right' = (uri.scheme === GIT_CONTENT_SCHEME && this.isDeletedFile(filePath))
+            ? 'left'
+            : 'right';
+
+        this.log.appendLine(`[comments] Creating new thread on ${filePath} L${startLine}:${startCol}-L${endLine}:${endCol} (side=${side})`);
         try {
             const created = await this._prService.createThread(
                 this._prId,
                 reply.text,
-                { filePath: `/${filePath}`, startLine, startCol, endLine, endCol },
+                { filePath: `/${filePath}`, startLine, startCol, endLine, endCol, side },
             );
 
             // Replace the temporary thread with a proper one
@@ -565,9 +592,13 @@ export class PrCommentController implements vscode.Disposable {
                 continue;
             }
 
-            // Resolve to workspace URI
+            // Resolve to workspace URI. Deleted files have no working copy, so
+            // anchor those threads to the git-ref content URI (the same URI the
+            // tree's "Show Changes" command opens for a delete).
             const relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
-            const fileUri = vscode.Uri.joinPath(root, relativePath);
+            const fileUri = this.isDeletedFile(relativePath) && this._targetRef
+                ? buildGitRefUri(relativePath, this._targetRef)
+                : vscode.Uri.joinPath(root, relativePath);
 
             // Determine line range from thread context
             const range = this.getRange(azdoThread);
@@ -970,12 +1001,16 @@ export class PrCommentController implements vscode.Disposable {
         const filePath = this.resolveFilePath(uri);
         this.log.appendLine(`[comments] createUserDraftThread: resolvedFilePath=${filePath ?? '(undefined)'}`);
         if (filePath) {
+            const side: 'left' | 'right' = (uri.scheme === GIT_CONTENT_SCHEME && this.isDeletedFile(filePath))
+                ? 'left'
+                : 'right';
             this._userDraftPositions.set(thread, {
                 filePath,
                 startLine: range.start.line + 1,
                 startCol: range.start.character + 1,
                 endLine: range.end.line + 1,
                 endCol: range.end.character + 1,
+                side,
             });
         }
 
@@ -991,7 +1026,7 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     /** Get info about a user draft thread for posting. */
-    getUserDraftInfo(thread: vscode.CommentThread): { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; body: string } | undefined {
+    getUserDraftInfo(thread: vscode.CommentThread): { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side: 'left' | 'right'; body: string } | undefined {
         if (!this.isUserDraft(thread)) { return undefined; }
         const pos = this._userDraftPositions.get(thread);
         if (!pos) { return undefined; }
@@ -1249,7 +1284,11 @@ export class PrCommentController implements vscode.Disposable {
         for (const d of data.userDrafts ?? []) {
             const root = this._workspaceRoot;
             if (!root) { continue; }
-            const fileUri = vscode.Uri.joinPath(root, d.filePath);
+            // For drafts on deleted files (or any left-side draft) restore against
+            // the git-ref URI so the draft re-attaches to the diff editor.
+            const fileUri = (d.side === 'left' && this._targetRef)
+                ? buildGitRefUri(d.filePath, this._targetRef)
+                : vscode.Uri.joinPath(root, d.filePath);
             const range = new vscode.Range(
                 Math.max(0, d.startLine - 1), Math.max(0, d.startCol - 1),
                 Math.max(0, d.endLine - 1), Math.max(0, d.endCol - 1),
@@ -1297,6 +1336,8 @@ interface PersistedUserDraft {
     endLine: number;
     endCol: number;
     body: string;
+    /** Which side of the diff the draft is anchored to (defaults to 'right' if absent for back-compat). */
+    side?: 'left' | 'right';
 }
 
 interface PersistedReplyDraft {

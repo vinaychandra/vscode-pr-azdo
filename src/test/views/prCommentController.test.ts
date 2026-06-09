@@ -2,9 +2,10 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { PrCommentController } from '../../views/prCommentController';
 import { RepositoryDetector } from '../../azdo/repositoryDetector';
+import { GIT_CONTENT_SCHEME } from '../../views/gitRefContentProvider';
 import type { API, Repository, RepositoryState, Remote } from '../../typings/git';
 import type { GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { CommentType, CommentThreadStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { CommentType, CommentThreadStatus, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 function createMockLog(): vscode.OutputChannel {
     return {
@@ -1119,5 +1120,265 @@ suite('File URI resolution: consistency across layouts', () => {
                 `URI path "${uri}" should end with /${testFile}`,
             );
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Deleted files — existing comments anchor to git-ref URI, new comments post
+// against the left side of the diff.
+// ---------------------------------------------------------------------------
+
+suite('Deleted files: comment thread anchoring', () => {
+    const REPO_ROOT = '/home/user/myrepo';
+    const DELETED_PATH = 'src/gone.ts';
+    const TARGET_REF = 'origin/main';
+
+    function makeLeftSideThread(id: number, filePath = '/' + DELETED_PATH): GitPullRequestCommentThread {
+        return {
+            id,
+            comments: [{
+                content: 'Why was this removed?',
+                author: { displayName: 'Reviewer' },
+                commentType: CommentType.Text,
+                isDeleted: false,
+                publishedDate: new Date('2026-01-01'),
+            }],
+            threadContext: {
+                filePath,
+                leftFileStart: { line: 4, offset: 1 },
+                leftFileEnd: { line: 4, offset: 1 },
+            },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+    }
+
+    test('existing thread on a deleted file is anchored to the git-ref URI', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, [DELETED_PATH], undefined,
+            new Map([[DELETED_PATH, VersionControlChangeType.Delete]]),
+            TARGET_REF,
+        );
+
+        await controller.updateThreads([makeLeftSideThread(101)]);
+
+        const vsThread = controller.findThreadByAzdoId(101);
+        assert.ok(vsThread, 'thread should be created');
+        assert.strictEqual(vsThread!.uri.scheme, GIT_CONTENT_SCHEME, 'thread URI scheme should be git-ref');
+        assert.ok(
+            vsThread!.uri.toString().includes(encodeURIComponent(TARGET_REF)),
+            `URI should reference target ref, got: ${vsThread!.uri.toString()}`,
+        );
+        assert.ok(
+            vsThread!.uri.path.endsWith('/' + DELETED_PATH),
+            `URI path should end with ${DELETED_PATH}, got: ${vsThread!.uri.path}`,
+        );
+        // Range should derive from leftFileStart (line 4 → 0-based line 3)
+        assert.strictEqual(vsThread!.range!.start.line, 3);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('edited-file threads still anchor to the workspace file URI', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            TARGET_REF,
+        );
+
+        const edited: GitPullRequestCommentThread = {
+            id: 200,
+            comments: [{
+                content: 'Edit comment',
+                author: { displayName: 'A' },
+                commentType: CommentType.Text,
+                isDeleted: false,
+                publishedDate: new Date(),
+            }],
+            threadContext: {
+                filePath: '/src/index.ts',
+                rightFileStart: { line: 7, offset: 1 },
+                rightFileEnd: { line: 7, offset: 1 },
+            },
+            status: CommentThreadStatus.Active,
+            isDeleted: false,
+        } as any;
+
+        await controller.updateThreads([edited]);
+        const vsThread = controller.findThreadByAzdoId(200);
+        assert.ok(vsThread);
+        assert.strictEqual(vsThread!.uri.scheme, 'file', 'edited-file thread should use file://');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('deleted-file thread falls back to file URI when target ref is unknown', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        // No targetRef passed → behavior should degrade gracefully (still file://, not crash)
+        controller.setPrContext(
+            {} as any, 42, [DELETED_PATH], undefined,
+            new Map([[DELETED_PATH, VersionControlChangeType.Delete]]),
+            undefined,
+        );
+
+        await controller.updateThreads([makeLeftSideThread(102)]);
+        const vsThread = controller.findThreadByAzdoId(102);
+        assert.ok(vsThread, 'thread should still be created');
+        assert.strictEqual(vsThread!.uri.scheme, 'file', 'without target ref the URI falls back to file://');
+
+        controller.dispose();
+        detector.dispose();
+    });
+});
+
+suite('Deleted files: posting new comments', () => {
+    const REPO_ROOT = '/home/user/myrepo';
+    const DELETED_PATH = 'src/gone.ts';
+    const TARGET_REF = 'origin/main';
+
+    test('createThread payload for delete uses leftFileStart/End, not rightFileStart/End', async () => {
+        // Capture the payload the API client receives.
+        let capturedThread: any;
+        const mockGitApi = {
+            createThread: async (thread: any) => {
+                capturedThread = thread;
+                return { ...thread, id: 999 };
+            },
+        };
+        const mockPrService = {
+            createThread: async (
+                _prId: number,
+                content: string,
+                ctx: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side?: 'left' | 'right' },
+            ) => {
+                const t: any = {
+                    comments: [{ content, commentType: CommentType.Text }],
+                    status: CommentThreadStatus.Active,
+                };
+                if (ctx) {
+                    const position = {
+                        start: { line: ctx.startLine, offset: ctx.startCol },
+                        end: { line: ctx.endLine, offset: ctx.endCol },
+                    };
+                    t.threadContext = ctx.side === 'left'
+                        ? { filePath: ctx.filePath, leftFileStart: position.start, leftFileEnd: position.end }
+                        : { filePath: ctx.filePath, rightFileStart: position.start, rightFileEnd: position.end };
+                }
+                return mockGitApi.createThread(t);
+            },
+        };
+
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            mockPrService as any, 42, [DELETED_PATH], undefined,
+            new Map([[DELETED_PATH, VersionControlChangeType.Delete]]),
+            TARGET_REF,
+        );
+
+        // Build a CommentReply against the git-ref URI (i.e. the left side of the diff)
+        const gitRefUri = vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///${DELETED_PATH}?ref=${encodeURIComponent(TARGET_REF)}`);
+        const tempThread = vscode.comments.createCommentController('test-delete', 'Test').createCommentThread(
+            gitRefUri,
+            new vscode.Range(3, 0, 3, 0),
+            [],
+        );
+        const reply: vscode.CommentReply = {
+            thread: tempThread,
+            text: 'This deletion looks wrong',
+        };
+
+        await controller.handleNewComment(reply);
+
+        assert.ok(capturedThread, 'createThread should have been called');
+        assert.ok(capturedThread.threadContext, 'threadContext should be present');
+        assert.ok(capturedThread.threadContext.leftFileStart, 'leftFileStart should be set');
+        assert.ok(capturedThread.threadContext.leftFileEnd, 'leftFileEnd should be set');
+        assert.strictEqual(capturedThread.threadContext.rightFileStart, undefined, 'rightFileStart should NOT be set');
+        assert.strictEqual(capturedThread.threadContext.rightFileEnd, undefined, 'rightFileEnd should NOT be set');
+        assert.strictEqual(capturedThread.threadContext.leftFileStart.line, 4); // 0-based line 3 → 1-based 4
+        assert.strictEqual(capturedThread.threadContext.filePath, '/' + DELETED_PATH);
+
+        tempThread.dispose();
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('createThread payload for an edited file still uses rightFileStart/End', async () => {
+        let capturedThread: any;
+        const mockPrService = {
+            createThread: async (
+                _prId: number,
+                content: string,
+                ctx: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side?: 'left' | 'right' },
+            ) => {
+                const t: any = {
+                    comments: [{ content, commentType: CommentType.Text }],
+                    status: CommentThreadStatus.Active,
+                };
+                if (ctx) {
+                    const position = {
+                        start: { line: ctx.startLine, offset: ctx.startCol },
+                        end: { line: ctx.endLine, offset: ctx.endCol },
+                    };
+                    t.threadContext = ctx.side === 'left'
+                        ? { filePath: ctx.filePath, leftFileStart: position.start, leftFileEnd: position.end }
+                        : { filePath: ctx.filePath, rightFileStart: position.start, rightFileEnd: position.end };
+                }
+                capturedThread = t;
+                return { ...t, id: 1000 };
+            },
+        };
+
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            mockPrService as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            TARGET_REF,
+        );
+
+        const fileUri = vscode.Uri.joinPath(vscode.Uri.file(REPO_ROOT), 'src/index.ts');
+        const tempThread = vscode.comments.createCommentController('test-edit', 'Test').createCommentThread(
+            fileUri,
+            new vscode.Range(6, 0, 6, 0),
+            [],
+        );
+        const reply: vscode.CommentReply = {
+            thread: tempThread,
+            text: 'looks fine',
+        };
+
+        await controller.handleNewComment(reply);
+
+        assert.ok(capturedThread.threadContext.rightFileStart, 'rightFileStart should be set');
+        assert.strictEqual(capturedThread.threadContext.leftFileStart, undefined, 'leftFileStart should NOT be set');
+        assert.strictEqual(capturedThread.threadContext.rightFileStart.line, 7);
+
+        tempThread.dispose();
+        controller.dispose();
+        detector.dispose();
     });
 });

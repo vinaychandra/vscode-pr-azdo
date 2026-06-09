@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import {
     buildFileTree,
     changeTypeLabel,
+    iconForChangeType,
+    getChangePath,
     FolderItem,
     FileChangeItem,
     ActivePrRootItem,
@@ -49,6 +51,130 @@ suite('changeTypeLabel', () => {
 
     test('None returns empty string', () => {
         assert.strictEqual(changeTypeLabel(VersionControlChangeType.None), '');
+    });
+});
+
+suite('iconForChangeType', () => {
+    test('Delete uses diff-removed icon with deleted color', () => {
+        const icon = iconForChangeType(VersionControlChangeType.Delete);
+        assert.ok(icon instanceof vscode.ThemeIcon);
+        assert.strictEqual(icon.id, 'diff-removed');
+        assert.ok(icon.color instanceof vscode.ThemeColor);
+    });
+
+    test('Add uses diff-added icon with added color', () => {
+        const icon = iconForChangeType(VersionControlChangeType.Add);
+        assert.ok(icon instanceof vscode.ThemeIcon);
+        assert.strictEqual(icon.id, 'diff-added');
+        assert.ok(icon.color instanceof vscode.ThemeColor);
+    });
+
+    test('Rename uses diff-renamed icon', () => {
+        const icon = iconForChangeType(VersionControlChangeType.Rename);
+        assert.ok(icon instanceof vscode.ThemeIcon);
+        assert.strictEqual(icon.id, 'diff-renamed');
+    });
+
+    test('Edit returns the default file icon (no color override)', () => {
+        const icon = iconForChangeType(VersionControlChangeType.Edit);
+        assert.strictEqual(icon, vscode.ThemeIcon.File);
+    });
+
+    test('combined Add|Edit bitmask prefers Add styling', () => {
+        const icon = iconForChangeType(VersionControlChangeType.Add | VersionControlChangeType.Edit);
+        assert.strictEqual((icon as vscode.ThemeIcon).id, 'diff-added');
+    });
+});
+
+suite('FileChangeItem visuals', () => {
+    test('deleted file uses the diff-removed icon', () => {
+        const tree = buildFileTree([{ item: { path: '/gone.ts' }, changeType: VersionControlChangeType.Delete } as any]);
+        const file = tree[0] as FileChangeItem;
+        assert.ok(file instanceof FileChangeItem);
+        assert.ok(file.iconPath instanceof vscode.ThemeIcon);
+        assert.strictEqual((file.iconPath as vscode.ThemeIcon).id, 'diff-removed');
+        assert.strictEqual(file.description, 'Delete');
+    });
+
+    test('edited file keeps the default file icon', () => {
+        const tree = buildFileTree([{ item: { path: '/index.ts' }, changeType: VersionControlChangeType.Edit } as any]);
+        const file = tree[0] as FileChangeItem;
+        assert.strictEqual(file.iconPath, vscode.ThemeIcon.File);
+    });
+});
+
+suite('getChangePath', () => {
+    test('reads item.path for edited/added entries', () => {
+        assert.strictEqual(
+            getChangePath({ item: { path: '/src/index.ts' }, changeType: VersionControlChangeType.Edit } as any),
+            'src/index.ts',
+        );
+    });
+
+    test('reads originalPath for delete entries (item.path is null)', () => {
+        // Real AzDO payload shape observed for deletes:
+        // {"originalPath":"/File2","item":{"originalObjectId":"...","path":null},"changeType":16}
+        assert.strictEqual(
+            getChangePath({
+                originalPath: '/File2',
+                item: { path: null, originalObjectId: 'abc' },
+                changeType: VersionControlChangeType.Delete,
+            } as any),
+            'File2',
+        );
+    });
+
+    test('strips leading slash', () => {
+        assert.strictEqual(getChangePath({ item: { path: '/a/b/c.ts' } } as any), 'a/b/c.ts');
+        assert.strictEqual(getChangePath({ originalPath: '/x.ts', item: { path: null } } as any), 'x.ts');
+    });
+
+    test('returns undefined when both fields are missing', () => {
+        assert.strictEqual(getChangePath({ item: {} } as any), undefined);
+        assert.strictEqual(getChangePath({} as any), undefined);
+        assert.strictEqual(getChangePath({ item: { path: null }, originalPath: null } as any), undefined);
+    });
+
+    test('prefers item.path over originalPath when both are present (rename: new path wins)', () => {
+        assert.strictEqual(
+            getChangePath({
+                item: { path: '/new/name.ts' },
+                originalPath: '/old/name.ts',
+                changeType: VersionControlChangeType.Rename | VersionControlChangeType.Edit,
+            } as any),
+            'new/name.ts',
+        );
+    });
+});
+
+suite('buildFileTree — delete entry shape', () => {
+    test('includes deleted files using originalPath', () => {
+        // This is the exact shape AzDO returns for a delete entry.
+        const tree = buildFileTree([{
+            changeTrackingId: 1,
+            originalPath: '/File2',
+            changeId: 1,
+            item: { originalObjectId: 'B4F8B3659348CE7EE18871B9C25AC0889A9E974C', path: null },
+            changeType: VersionControlChangeType.Delete,
+        } as any]);
+        assert.strictEqual(tree.length, 1, 'tree should contain the deleted file');
+        const file = tree[0] as FileChangeItem;
+        assert.ok(file instanceof FileChangeItem);
+        assert.strictEqual(file.fileName, 'File2');
+        assert.strictEqual(file.filePath, 'File2');
+        assert.strictEqual(file.changeType, VersionControlChangeType.Delete);
+    });
+
+    test('mixed edit + delete tree', () => {
+        const tree = buildFileTree([
+            { item: { path: '/src/index.ts' }, changeType: VersionControlChangeType.Edit } as any,
+            { originalPath: '/src/gone.ts', item: { path: null }, changeType: VersionControlChangeType.Delete } as any,
+        ]);
+        // Both files share a "src" folder
+        assert.strictEqual(tree.length, 1);
+        const folder = tree[0] as FolderItem;
+        assert.strictEqual(folder.folderName, 'src');
+        assert.strictEqual(folder.children.length, 2);
     });
 });
 

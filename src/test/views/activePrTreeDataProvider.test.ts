@@ -976,3 +976,52 @@ suite('ActivePrTreeDataProvider — getChangeType', () => {
         provider.dispose();
     });
 });
+
+// --- Real-shape AzDO delete entry ---
+// Deletes return a different payload shape than edits/adds:
+//   { originalPath: '/File2', item: { path: null, originalObjectId: '...' }, changeType: 16 }
+// The provider must read originalPath when item.path is null.
+suite('ActivePrTreeDataProvider — delete entry shape', () => {
+    test('populates changeTypeMap and tree from AzDO delete payload', async () => {
+        const pr: GitPullRequest = {
+            pullRequestId: 4,
+            title: 'Deleted File2',
+            createdBy: { displayName: 'Owner', id: 'owner-id' },
+            sourceRefName: 'refs/heads/deletef2',
+            targetRefName: 'refs/heads/main',
+            status: 1,
+        } as any;
+
+        // Exact payload observed from AzDO for a Delete entry
+        const deleteEntry = {
+            changeTrackingId: 1,
+            originalPath: '/File2',
+            changeId: 1,
+            item: { originalObjectId: 'B4F8B3659348CE7EE18871B9C25AC0889A9E974C', path: null },
+            changeType: VersionControlChangeType.Delete,
+        } as any;
+
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => pr,
+                getPrIterations: async () => [{ id: 1 }] as any,
+                getPrIterationChanges: async () => ({ changeEntries: [deleteEntry] }),
+                getPrCommits: async () => [],
+                getPrThreads: async () => [],
+            }),
+            createMockGitApi('deletef2'),
+            createMockLog(),
+        );
+
+        await provider.detectActivePr();
+        const roots = await provider.getChildren();
+        const prRoot = roots.find(r => r instanceof ActivePrRootItem);
+        if (prRoot) {
+            await provider.getChildren(prRoot);
+        }
+
+        assert.strictEqual(provider.getChangeType('File2'), VersionControlChangeType.Delete);
+        assert.deepStrictEqual(provider.changedFilePaths, ['File2']);
+        provider.dispose();
+    });
+});

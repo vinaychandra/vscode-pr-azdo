@@ -90,7 +90,7 @@ export class FileChangeItem extends vscode.TreeItem {
     ) {
         super(fileName, vscode.TreeItemCollapsibleState.None);
         this.description = changeTypeLabel(changeType);
-        this.iconPath = vscode.ThemeIcon.File;
+        this.iconPath = iconForChangeType(changeType);
         this.resourceUri = vscode.Uri.parse(`file:///${filePath}`);
         this.contextValue = 'activePr.file';
         this.tooltip = `${filePath} (${changeTypeLabel(changeType)})`;
@@ -244,6 +244,43 @@ export function changeTypeLabel(ct: VersionControlChangeType): string {
 }
 
 /**
+ * Pick a themed icon for a file change so adds/deletes/renames are visually
+ * distinct from edits in the tree.
+ */
+export function iconForChangeType(ct: VersionControlChangeType): vscode.ThemeIcon {
+    if (ct & VersionControlChangeType.Delete) {
+        return new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('gitDecoration.deletedResourceForeground'));
+    }
+    if (ct & VersionControlChangeType.Add) {
+        return new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('gitDecoration.addedResourceForeground'));
+    }
+    if (ct & VersionControlChangeType.Rename) {
+        return new vscode.ThemeIcon('diff-renamed', new vscode.ThemeColor('gitDecoration.renamedResourceForeground'));
+    }
+    return vscode.ThemeIcon.File;
+}
+
+/**
+ * Extract the repo-relative file path for a PR change entry.
+ *
+ * AzDO returns different shapes per change type:
+ * - Edit / Add: path is on `item.path` (e.g. "/src/index.ts")
+ * - Delete: `item.path` is `null` and the path is on the top-level `originalPath`
+ * - Rename: `item.path` is the new path, top-level `originalPath` is the old path
+ *
+ * Returns the path WITHOUT a leading slash, or `undefined` if neither field
+ * yields a usable path.
+ */
+export function getChangePath(change: GitPullRequestChange): string | undefined {
+    const ch = change as any;
+    const raw = (typeof ch.item?.path === 'string' && ch.item.path)
+        || (typeof ch.originalPath === 'string' && ch.originalPath)
+        || undefined;
+    if (!raw) { return undefined; }
+    return raw.startsWith('/') ? raw.substring(1) : raw;
+}
+
+/**
  * Build a folder tree from a flat list of file changes.
  * Single-child intermediate folders are compacted ("src/components" instead
  * of separate "src" → "components" nodes).
@@ -257,10 +294,9 @@ export function buildFileTree(changes: GitPullRequestChange[]): (FolderItem | Fi
     const root: FolderNode = { children: new Map(), files: [] };
 
     for (const change of changes) {
-        const rawPath = (change as any).item?.path as string | undefined;
-        if (!rawPath) { continue; }
+        const path = getChangePath(change);
+        if (!path) { continue; }
 
-        const path = rawPath.startsWith('/') ? rawPath.substring(1) : rawPath;
         const parts = path.split('/');
         const fileName = parts.pop()!;
 

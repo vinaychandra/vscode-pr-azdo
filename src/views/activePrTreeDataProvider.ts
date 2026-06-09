@@ -14,6 +14,7 @@ import {
     DraftCommentItem,
     CommitItem,
     buildFileTree,
+    getChangePath,
     type ActivePrTreeItem,
 } from './activePrTreeItems';
 
@@ -78,6 +79,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     /** Look up the change type for a file path (relative to repo root). */
     getChangeType(filePath: string): VersionControlChangeType | undefined {
         return this._changeTypeMap.get(filePath);
+    }
+
+    /** Read-only view of all known file change types (path → bitmask). */
+    get changeTypes(): ReadonlyMap<string, VersionControlChangeType> {
+        return this._changeTypeMap;
     }
 
     private collectFilePaths(nodes: (FolderItem | FileChangeItem)[]): string[] {
@@ -441,14 +447,22 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 const changes = (iterationChanges.changeEntries ?? []) as GitPullRequestChange[];
                 this._fileTree = buildFileTree(changes);
                 this._changeTypeMap.clear();
+                const ctCounts = { Add: 0, Edit: 0, Delete: 0, Rename: 0, Other: 0 };
                 for (const ch of changes) {
-                    const rawPath = (ch as any).item?.path as string | undefined;
-                    if (rawPath) {
-                        const p = rawPath.startsWith('/') ? rawPath.substring(1) : rawPath;
-                        this._changeTypeMap.set(p, (ch as any).changeType ?? VersionControlChangeType.None);
-                    }
+                    const p = getChangePath(ch);
+                    if (!p) { continue; }
+                    const ct = (ch as any).changeType ?? VersionControlChangeType.None;
+                    this._changeTypeMap.set(p, ct);
+                    if (ct & VersionControlChangeType.Delete) { ctCounts.Delete++; }
+                    else if (ct & VersionControlChangeType.Add) { ctCounts.Add++; }
+                    else if (ct & VersionControlChangeType.Rename) { ctCounts.Rename++; }
+                    else if (ct & VersionControlChangeType.Edit) { ctCounts.Edit++; }
+                    else { ctCounts.Other++; }
                 }
-                this.log.appendLine(`[active-pr] Loaded ${changes.length} file change(s) from iteration ${latestIteration.id}`);
+                this.log.appendLine(
+                    `[active-pr] Loaded ${changes.length} file change(s) from iteration ${latestIteration.id} ` +
+                    `(Edit=${ctCounts.Edit}, Add=${ctCounts.Add}, Delete=${ctCounts.Delete}, Rename=${ctCounts.Rename}, Other=${ctCounts.Other})`,
+                );
             } else {
                 this._fileTree = [];
             }

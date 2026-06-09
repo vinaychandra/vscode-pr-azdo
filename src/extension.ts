@@ -380,11 +380,15 @@ export async function activate(context: vscode.ExtensionContext) {
 				void userIdPromise.then(uid => {
 					currentUserId = uid;
 					const pr = activePrProvider?._activePrForContext;
+					const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '');
+					const targetRef = targetBranch ? `origin/${targetBranch}` : undefined;
 					commentController.setPrContext(
 						prService,
 						pr?.pullRequestId,
 						activePrProvider?.changedFilePaths,
 						currentUserId,
+						activePrProvider?.changeTypes,
+						targetRef,
 					);
 					commentController.updateThreads(activePrProvider?.filteredThreads);
 					// Keep AI context provider in sync
@@ -596,6 +600,13 @@ export async function activate(context: vscode.ExtensionContext) {
 				const path = extractPathFromGitRefUri(uri);
 				if (!path) { return; }
 
+				// For deleted files there is no working-copy file to toggle to
+				const ctForToggle = activePrProvider?.getChangeType(path);
+				if (ctForToggle !== undefined && (ctForToggle & VersionControlChangeType.Delete)) {
+					vscode.window.showInformationMessage('This file was deleted in the pull request — there is no working-copy version to open.');
+					return;
+				}
+
 				outputChannel.appendLine(`[toggle] Diff → File for ${path}`);
 				const fileUri = vscode.Uri.joinPath(repoRoot, path);
 				const doc = await vscode.workspace.openTextDocument(fileUri);
@@ -635,10 +646,29 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
 			if (!repoRoot) { return; }
+
+			const pos = new vscode.Position(Math.max(0, line - 1), 0);
+
+			// Deleted files have no working copy — open the old content from the
+			// target branch as a single read-only editor (a diff view stacks
+			// inline by default which hides the comment gutter on the left side).
+			const changeType = activePrProvider?.getChangeType(filePath);
+			if (changeType !== undefined && (changeType & VersionControlChangeType.Delete)) {
+				const pr = activePrProvider?._activePrForContext;
+				const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+				const targetRef = `origin/${targetBranch}`;
+				const uri = buildGitRefUri(filePath, targetRef);
+				outputChannel.appendLine(`[goToComment] Deleted file ${filePath} — opening ${uri.toString()} at L${line}`);
+				const doc = await vscode.workspace.openTextDocument(uri);
+				const editor = await vscode.window.showTextDocument(doc, { preview: false });
+				editor.selection = new vscode.Selection(pos, pos);
+				editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+				return;
+			}
+
 			const fileUri = vscode.Uri.joinPath(repoRoot, filePath);
 			const doc = await vscode.workspace.openTextDocument(fileUri);
 			const editor = await vscode.window.showTextDocument(doc);
-			const pos = new vscode.Position(Math.max(0, line - 1), 0);
 			editor.selection = new vscode.Selection(pos, pos);
 			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
 		}),
@@ -792,13 +822,14 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 				try {
-					outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine}`);
+					outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine} (side=${info.side})`);
 					await prService.createThread(prId, body, {
 						filePath: `/${info.filePath}`,
 						startLine: info.startLine,
 						startCol: info.startCol,
 						endLine: info.endLine,
 						endCol: info.endCol,
+						side: info.side,
 					});
 					commentController.disposeUserDraft(reply.thread);
 					vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
@@ -1199,13 +1230,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			const prId = activePrProvider._activePrForContext.pullRequestId;
 			try {
-				outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine}`);
+				outputChannel.appendLine(`[comments] Posting user draft on ${info.filePath} L${info.startLine} (side=${info.side})`);
 				await prService.createThread(prId, info.body, {
 					filePath: `/${info.filePath}`,
 					startLine: info.startLine,
 					startCol: info.startCol,
 					endLine: info.endLine,
 					endCol: info.endCol,
+					side: info.side,
 				});
 				commentController.disposeUserDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
@@ -1252,13 +1284,14 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			try {
-				outputChannel.appendLine(`[comments] Posting edited user draft on ${info.filePath} L${info.startLine}`);
+				outputChannel.appendLine(`[comments] Posting edited user draft on ${info.filePath} L${info.startLine} (side=${info.side})`);
 				await prService.createThread(prId, body, {
 					filePath: `/${info.filePath}`,
 					startLine: info.startLine,
 					startCol: info.startCol,
 					endLine: info.endLine,
 					endCol: info.endCol,
+					side: info.side,
 				});
 				commentController.disposeUserDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
@@ -1589,6 +1622,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			const filePath = item.filePath;
 			const changeType = item.changeType;
+
+			// Deleted files: open the old content directly. A diff view stacks
+			// the panes inline and hides the comment gutter on the left, so
+			// commenting on deletes works better in a single editor.
+			if (changeType & VersionControlChangeType.Delete) {
+				const uri = buildGitRefUri(filePath, targetRef);
+				outputChannel.appendLine(`[diff] Opening deleted file ${filePath} from ${targetRef}`);
+				const doc = await vscode.workspace.openTextDocument(uri);
+				await vscode.window.showTextDocument(doc, { preview: false });
+				return;
+			}
 
 			outputChannel.appendLine(`[diff] Opening diff for ${filePath} (${item.description}) against ${targetRef}`);
 
