@@ -3,7 +3,7 @@
   "publisher": "vinaydommeti",
   "displayName": "Azure DevOps - Code Reviews",
   "description": "Azure DevOps - Code Review Experience",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "author": {
     "name": "Vinay Dommeti"
   },
@@ -561,7 +561,9 @@
               "description": "Repository-relative file path to read."
             }
           },
-          "required": ["path"]
+          "required": [
+            "path"
+          ]
         }
       },
       {
@@ -581,7 +583,9 @@
               "description": "Optional repository-relative path to limit the search."
             }
           },
-          "required": ["query"]
+          "required": [
+            "query"
+          ]
         }
       }
     ],

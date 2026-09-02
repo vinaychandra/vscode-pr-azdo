@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.13]
+
 ### Added
 
 - **Copilot Review Lenses** — Review with Copilot now offers General, Bugs, Security, Architecture, and Performance lenses before choosing the Git review scope. Users can create, edit, and delete reusable global Markdown lenses, and existing custom detailed-review prompts are migrated into a custom lens.
