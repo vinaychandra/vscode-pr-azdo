@@ -20,6 +20,13 @@ import {
 
 export type CommentFilter = 'active' | 'all';
 
+export interface ActivePrReviewContext {
+    pr: GitPullRequest;
+    mode: 'workingTree' | 'snapshot';
+    sourceRef?: string;
+    targetRef?: string;
+}
+
 /**
  * Provides data for the "Active Pull Request" tree view.
  *
@@ -53,10 +60,19 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _reviewedFiles = new Set<string>();
     private _changeTypeMap = new Map<string, VersionControlChangeType>();
     private _parentMap = new Map<ActivePrTreeItem, ActivePrTreeItem | undefined>();
+    private _reviewContext: ActivePrReviewContext | undefined;
 
     /** Expose for context key. */
     get _activePrForContext(): GitPullRequest | undefined {
         return this._activePr;
+    }
+
+    get reviewContext(): ActivePrReviewContext | undefined {
+        return this._reviewContext;
+    }
+
+    get isSnapshotReview(): boolean {
+        return this._reviewContext?.mode === 'snapshot';
     }
 
     /** Expose cached iterations for the "View Original Context" feature. */
@@ -268,6 +284,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     /** Re-detect the active PR for the current branch and refresh the tree. */
     async detectActivePr(): Promise<void> {
+        if (this.isSnapshotReview) {
+            this.log.appendLine('[active-pr] Skipping HEAD detection while a snapshot review is pinned.');
+            return;
+        }
         const generation = ++this._detectionGeneration;
 
         // Skip detection when not authenticated — avoids triggering login prompts
@@ -331,7 +351,29 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._allThreads = undefined;
         this._iterations = undefined;
         this._changeTypeMap.clear();
+        if (this.isSnapshotReview) {
+            this._onDidChangeTreeData.fire();
+            this._onDidUpdateComments.fire();
+            return;
+        }
         this._activePr = undefined;
+        this._reviewContext = undefined;
+        this._lastDetectedBranch = undefined;
+        this._lastDetectedCommit = undefined;
+        void this.detectActivePr();
+    }
+
+    pinSnapshotReview(pr: GitPullRequest, sourceRef: string, targetRef: string): void {
+        this._detectionGeneration++;
+        this._lastDetectedBranch = undefined;
+        this._lastDetectedCommit = undefined;
+        this.setActivePr(pr, { pr, mode: 'snapshot', sourceRef, targetRef }, true);
+    }
+
+    stopSnapshotReview(): void {
+        if (!this.isSnapshotReview) { return; }
+        this._detectionGeneration++;
+        this.setActivePr(undefined);
         this._lastDetectedBranch = undefined;
         this._lastDetectedCommit = undefined;
         void this.detectActivePr();
@@ -354,9 +396,15 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._onDidUpdateComments.fire();
     }
 
-    private setActivePr(pr: GitPullRequest | undefined): void {
-        const changed = pr?.pullRequestId !== this._activePr?.pullRequestId;
+    private setActivePr(pr: GitPullRequest | undefined, reviewContext?: ActivePrReviewContext, forceReload = false): void {
+        const nextContext = pr ? (reviewContext ?? { pr, mode: 'workingTree' as const }) : undefined;
+        const changed = forceReload
+            || pr?.pullRequestId !== this._activePr?.pullRequestId
+            || nextContext?.mode !== this._reviewContext?.mode
+            || nextContext?.sourceRef !== this._reviewContext?.sourceRef
+            || nextContext?.targetRef !== this._reviewContext?.targetRef;
         this._activePr = pr;
+        this._reviewContext = nextContext;
         if (changed) {
             this._activePrGeneration++;
             this._fileTree = undefined;
@@ -422,7 +470,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         if (!element) {
             return trackChildren(undefined, [
                 new ReviewModeToggleItem(this._reviewMode, this._allThreads?.length ?? 0),
-                new ActivePrRootItem(this._activePr),
+                new ActivePrRootItem(this._activePr, this.isSnapshotReview),
             ]);
         }
 

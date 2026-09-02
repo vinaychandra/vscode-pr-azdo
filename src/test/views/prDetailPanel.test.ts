@@ -238,6 +238,7 @@ suite('buildHtml', () => {
         assert.ok(html.includes('Reject'));
         assert.ok(html.includes('Open in Browser'));
         assert.ok(html.includes('Copy Link'));
+        assert.ok(html.includes('Review Pull Request'));
     });
 
     test('shows Draft badge when isDraft', () => {

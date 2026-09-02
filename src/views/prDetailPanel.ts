@@ -275,7 +275,7 @@ export function buildHtml(pr: GitPullRequest, remoteInfo: ParsedAzDoRemote): str
     <button class="btn-danger" onclick="send('reject')">👎 Reject</button>
     <button class="btn-secondary" onclick="send('openInBrowser')">🌐 Open in Browser</button>
     <button class="btn-secondary" onclick="send('copyLink')">📋 Copy Link</button>
-    <button class="btn-secondary" onclick="send('checkout')">📥 Checkout Pull Request</button>
+    <button class="btn-secondary" onclick="send('checkout')">📥 Review Pull Request</button>
   </div>
 
   <dl class="info-grid">

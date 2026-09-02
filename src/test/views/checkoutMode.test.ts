@@ -14,6 +14,14 @@ suite('chooseCheckoutMode', () => {
         assert.strictEqual(prompted, false);
     });
 
+    test('returns snapshot mode without prompting', async () => {
+        const mode = await chooseCheckoutMode('snapshot', async () => {
+            assert.fail('explicit snapshot mode should not prompt');
+        });
+
+        assert.strictEqual(mode, 'snapshot');
+    });
+
     test('returns the mode selected for this checkout', async () => {
         const mode = await chooseCheckoutMode(undefined, async items => {
             assert.deepStrictEqual(items, CHECKOUT_MODE_ITEMS);
@@ -21,6 +29,11 @@ suite('chooseCheckoutMode', () => {
         });
 
         assert.strictEqual(mode, 'branch');
+    });
+
+    test('offers review without checkout before checkout destinations', () => {
+        assert.strictEqual(CHECKOUT_MODE_ITEMS[0].mode, 'snapshot');
+        assert.match(CHECKOUT_MODE_ITEMS[0].label, /Without Checkout/);
     });
 
     test('returns undefined when checkout selection is cancelled', async () => {

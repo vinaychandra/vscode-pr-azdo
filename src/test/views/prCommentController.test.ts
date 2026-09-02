@@ -577,6 +577,116 @@ suite('PrCommentController', () => {
         });
         controller.dispose();
     });
+
+    test('keeps AI drafts scoped to their PR across context switches', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        controller.setPrContext({} as any, 1, ['src/one.ts']);
+        await controller.updateThreads([]);
+        controller.createDraftThread('src/one.ts', 1, 'PR one draft');
+
+        controller.setPrContext({} as any, 2, ['src/two.ts']);
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.draftCount, 0);
+
+        controller.createDraftThread('src/two.ts', 2, 'PR two draft');
+        controller.setPrContext({} as any, 1, ['src/one.ts']);
+        await controller.updateThreads([]);
+
+        assert.strictEqual(controller.draftCount, 1);
+        assert.strictEqual(controller.serializeDrafts().aiDrafts[0]?.body, 'PR one draft');
+        assert.strictEqual(controller.serializeDraftsForPr(2).aiDrafts[0]?.body, 'PR two draft');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('hides drafts with Review Mode and restores them when enabled', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext({} as any, 1, ['src/index.ts']);
+        await controller.updateThreads([]);
+        controller.createDraftThread('src/index.ts', 1, 'hidden draft');
+
+        controller.setReviewMode(false);
+        assert.strictEqual(controller.draftCount, 0);
+        assert.strictEqual(controller.serializeDrafts().aiDrafts[0]?.body, 'hidden draft');
+
+        controller.setReviewMode(true);
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.draftCount, 1);
+        assert.strictEqual(controller.serializeDrafts().aiDrafts[0]?.body, 'hidden draft');
+
+        controller.setReviewMode(false);
+        controller.clearDrafts();
+        controller.setReviewMode(true);
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.draftCount, 0);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('hides and restores user drafts with Review Mode', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext({} as any, 1, ['src/index.ts']);
+        await controller.updateThreads([]);
+        controller.createUserDraftThread(
+            vscode.Uri.joinPath(repo.rootUri, 'src/index.ts'),
+            new vscode.Range(0, 0, 0, 1),
+            'user draft',
+        );
+
+        controller.setReviewMode(false);
+        assert.strictEqual(controller.userDraftCount, 0);
+        assert.strictEqual(controller.serializeDrafts().userDrafts[0]?.body, 'user draft');
+
+        controller.setReviewMode(true);
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.userDraftCount, 1);
+        assert.strictEqual(controller.serializeDrafts().userDrafts[0]?.body, 'user draft');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('keeps reply drafts scoped to their PR across context switches', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        const azdoThread = makeThread({ id: 10 });
+        controller.setReviewMode(true);
+        controller.setPrContext({} as any, 1, ['src/index.ts']);
+        await controller.updateThreads([azdoThread]);
+        const firstThread = controller.findThreadByAzdoId(10);
+        assert.ok(firstThread);
+        controller.saveReplyAsDraft(firstThread, 'reply draft');
+
+        controller.setPrContext({} as any, 2, ['src/other.ts']);
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.findThreadByAzdoId(10), undefined);
+
+        controller.setPrContext({} as any, 1, ['src/index.ts']);
+        await controller.updateThreads([azdoThread]);
+        const restoredThread = controller.findThreadByAzdoId(10);
+        assert.ok(restoredThread);
+        assert.strictEqual(controller.getReplyDraftInfo(restoredThread)?.body, 'reply draft');
+
+        controller.dispose();
+        detector.dispose();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -1219,6 +1329,70 @@ suite('Deleted files: comment thread anchoring', () => {
         const vsThread = controller.findThreadByAzdoId(200);
         assert.ok(vsThread);
         assert.strictEqual(vsThread!.uri.scheme, 'file', 'edited-file thread should use file://');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('snapshot edited-file threads anchor to the source commit URI', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            'target-sha', 'source-sha',
+        );
+
+        await controller.updateThreads([{
+            id: 201,
+            comments: [{ content: 'Right side', author: { displayName: 'A' }, commentType: CommentType.Text }],
+            threadContext: {
+                filePath: '/src/index.ts',
+                rightFileStart: { line: 7, offset: 1 },
+                rightFileEnd: { line: 7, offset: 1 },
+            },
+            status: CommentThreadStatus.Active,
+        } as any]);
+
+        const vsThread = controller.findThreadByAzdoId(201);
+        assert.ok(vsThread);
+        assert.strictEqual(vsThread!.uri.scheme, GIT_CONTENT_SCHEME);
+        assert.strictEqual(new URLSearchParams(vsThread!.uri.query).get('ref'), 'source-sha');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('snapshot left-side edited-file threads anchor to the target commit URI', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            'target-sha', 'source-sha',
+        );
+
+        await controller.updateThreads([{
+            id: 202,
+            comments: [{ content: 'Left side', author: { displayName: 'A' }, commentType: CommentType.Text }],
+            threadContext: {
+                filePath: '/src/index.ts',
+                leftFileStart: { line: 4, offset: 1 },
+                leftFileEnd: { line: 4, offset: 1 },
+            },
+            status: CommentThreadStatus.Active,
+        } as any]);
+
+        const vsThread = controller.findThreadByAzdoId(202);
+        assert.ok(vsThread);
+        assert.strictEqual(new URLSearchParams(vsThread!.uri.query).get('ref'), 'target-sha');
+        assert.strictEqual(vsThread!.range!.start.line, 3);
 
         controller.dispose();
         detector.dispose();

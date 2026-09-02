@@ -287,4 +287,25 @@ suite('buildDiffParams', () => {
         assert.strictEqual(diff.title, 'new.ts (Added)');
         assert.ok(diff.leftUri.path.includes('__empty__'));
     });
+
+    test('snapshot edit uses target and source git refs', () => {
+        const diff = buildDiffParams(
+            'src/index.ts', VersionControlChangeType.Edit, repoRoot,
+            'target-sha', 'main', 'source-sha', 'feature/test',
+        );
+        assert.strictEqual(diff.leftUri.scheme, GIT_CONTENT_SCHEME);
+        assert.strictEqual(new URLSearchParams(diff.leftUri.query).get('ref'), 'target-sha');
+        assert.strictEqual(diff.rightUri.scheme, GIT_CONTENT_SCHEME);
+        assert.strictEqual(new URLSearchParams(diff.rightUri.query).get('ref'), 'source-sha');
+        assert.strictEqual(diff.title, 'index.ts (main ↔ feature/test)');
+    });
+
+    test('snapshot add uses empty target and source git ref', () => {
+        const diff = buildDiffParams(
+            'src/new.ts', VersionControlChangeType.Add, repoRoot,
+            'target-sha', 'main', 'source-sha', 'feature/test',
+        );
+        assert.ok(diff.leftUri.path.includes('__empty__'));
+        assert.strictEqual(new URLSearchParams(diff.rightUri.query).get('ref'), 'source-sha');
+    });
 });

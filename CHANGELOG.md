@@ -8,10 +8,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **No-checkout pull request reviews** — the Review Pull Request picker can now pin a PR without switching branches or creating a worktree. Source and target commits are fetched into extension-owned Git refs and used for read-only diffs, comments, drafts, suggestions, and AI review while the working tree, index, current branch, and local branches remain unchanged.
 - **Reusable review worktree checkout** — each checkout action lets you choose between the current repository and one detached review worktree. The default sibling path is `<repo>.worktrees/review`, it can be customized in settings, and clean worktrees are reused when switching reviews. Dirty review worktrees are left untouched.
 
 ### Fixed
 
+- **Draft lifecycle across PR and Review Mode changes** — AI, user, and reply drafts are now scoped per pull request, hidden without being deleted when Review Mode is off, restored when returning to a PR, and flushed to workspace state during extension deactivation.
 - **Stale active PR data after rapid branch switches** — overlapping PR detection and data-loading requests can no longer let an older branch overwrite the current PR or populate it with another PR's files and comments.
 - **Authentication welcome-state drift** — silent sign-in and recovery now keep the `isAuthenticated` context key synchronized with the actual connection result.
 - **Windows file resolution and suggestion line endings** — repository paths are matched case-insensitively on Windows, and CRLF suggestion blocks render without stray carriage returns.

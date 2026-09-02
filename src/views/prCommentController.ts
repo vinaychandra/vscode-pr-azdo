@@ -55,6 +55,13 @@ export class PrCommentController implements vscode.Disposable {
     /** Git ref for the target branch (e.g. 'origin/main'); used to anchor comments on deleted files. */
     private _targetRef: string | undefined;
 
+    /** Source commit for a no-checkout review; when set, right-side content is virtual. */
+    private _sourceRef: string | undefined;
+
+    /** Session-local snapshots keyed by PR so drafts survive context and visibility changes. */
+    private _draftsByPr = new Map<number, PersistedDrafts>();
+    private _renderedDraftPrId: number | undefined;
+
     private _prService: PullRequestService | undefined;
     private _prId: number | undefined;
     private _currentUserId: string | undefined;
@@ -76,6 +83,10 @@ export class PrCommentController implements vscode.Disposable {
         );
 
         this.applyCommentingRangeProvider();
+
+        this._disposables.push(
+            this.onDidPerformAction(() => this.cacheRenderedDrafts()),
+        );
 
         this.log.appendLine('[comments] PrCommentController created');
     }
@@ -117,6 +128,10 @@ export class PrCommentController implements vscode.Disposable {
     /** Enable or disable review mode (controls gutter "+" and inline threads). */
     setReviewMode(on: boolean): void {
         if (this._reviewMode === on) { return; }
+        if (!on) {
+            this.cacheRenderedDrafts();
+            this.clearRenderedDrafts();
+        }
         this._reviewMode = on;
         this.log.appendLine(`[comments] setReviewMode: ${on}`);
         this.applyCommentingRangeProvider();
@@ -136,14 +151,20 @@ export class PrCommentController implements vscode.Disposable {
         currentUserId?: string,
         changeTypes?: ReadonlyMap<string, number>,
         targetRef?: string,
+        sourceRef?: string,
     ): void {
+        if (prId !== this._prId) {
+            this.cacheRenderedDrafts();
+            this.clearRenderedDrafts();
+        }
         this._prService = prService;
         this._prId = prId;
         this._prFilePaths = new Set(prFilePaths ?? []);
         this._currentUserId = currentUserId;
         this._changeTypes = changeTypes ? new Map(changeTypes) : new Map();
         this._targetRef = targetRef;
-        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}`);
+        this._sourceRef = sourceRef;
+        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}, sourceRef=${sourceRef ?? '(working tree)'}`);
 
         // Re-assign the commenting range provider so VS Code re-queries
         // provideCommentingRanges for all already-open editors.
@@ -154,6 +175,27 @@ export class PrCommentController implements vscode.Disposable {
     private isDeletedFile(relativePath: string): boolean {
         const ct = this._changeTypes.get(relativePath);
         return ct !== undefined && (ct & VersionControlChangeType.Delete) !== 0;
+    }
+
+    private getReviewFileUri(relativePath: string, side: 'left' | 'right' = 'right'): vscode.Uri | undefined {
+        if (side === 'left' && this._targetRef) {
+            return buildGitRefUri(relativePath, this._targetRef);
+        }
+        if (side === 'right' && this._sourceRef) {
+            return buildGitRefUri(relativePath, this._sourceRef);
+        }
+        const root = this._workspaceRoot;
+        return root ? vscode.Uri.joinPath(root, relativePath) : undefined;
+    }
+
+    private getUriSide(uri: vscode.Uri, relativePath: string): 'left' | 'right' {
+        if (uri.scheme === GIT_CONTENT_SCHEME) {
+            const ref = new URLSearchParams(uri.query).get('ref');
+            if (this._targetRef && ref === this._targetRef) {
+                return 'left';
+            }
+        }
+        return this.isDeletedFile(relativePath) ? 'left' : 'right';
     }
 
     /**
@@ -171,7 +213,14 @@ export class PrCommentController implements vscode.Disposable {
         }
         if (uri.scheme === GIT_CONTENT_SCHEME) {
             const relative = extractPathFromGitRefUri(uri);
-            return relative !== undefined && this._prFilePaths.has(relative);
+            if (relative === undefined || !this._prFilePaths.has(relative)) {
+                return false;
+            }
+            if (this._sourceRef) {
+                const ref = new URLSearchParams(uri.query).get('ref');
+                return ref === this._sourceRef || ref === this._targetRef;
+            }
+            return true;
         }
         return false;
     }
@@ -239,9 +288,7 @@ export class PrCommentController implements vscode.Disposable {
 
         // Deleted files (and any other left-side-of-diff content) need to be
         // anchored to leftFileStart/End, not the default rightFileStart/End.
-        const side: 'left' | 'right' = (uri.scheme === GIT_CONTENT_SCHEME && this.isDeletedFile(filePath))
-            ? 'left'
-            : 'right';
+        const side = this.getUriSide(uri, filePath);
 
         this.log.appendLine(`[comments] Creating new thread on ${filePath} L${startLine}:${startCol}-L${endLine}:${endCol} (side=${side})`);
         try {
@@ -449,16 +496,24 @@ export class PrCommentController implements vscode.Disposable {
         if (!origFilePath) { return undefined; }
 
         const startLine = tracking?.origRightFileStart?.line
+            ?? tracking?.origLeftFileStart?.line
             ?? azdoThread.threadContext?.rightFileStart?.line
+            ?? azdoThread.threadContext?.leftFileStart?.line
             ?? 1;
         const startCol = tracking?.origRightFileStart?.offset
+            ?? tracking?.origLeftFileStart?.offset
             ?? azdoThread.threadContext?.rightFileStart?.offset
+            ?? azdoThread.threadContext?.leftFileStart?.offset
             ?? 1;
         const endLine = tracking?.origRightFileEnd?.line
+            ?? tracking?.origLeftFileEnd?.line
             ?? azdoThread.threadContext?.rightFileEnd?.line
+            ?? azdoThread.threadContext?.leftFileEnd?.line
             ?? startLine;
         const endCol = tracking?.origRightFileEnd?.offset
+            ?? tracking?.origLeftFileEnd?.offset
             ?? azdoThread.threadContext?.rightFileEnd?.offset
+            ?? azdoThread.threadContext?.leftFileEnd?.offset
             ?? startCol;
 
         const filePath = origFilePath.startsWith('/') ? origFilePath.substring(1) : origFilePath;
@@ -499,6 +554,7 @@ export class PrCommentController implements vscode.Disposable {
 
         if (!threads || threads.length === 0) {
             this.disposeThreads();
+            this.restoreCurrentPrDrafts();
             this.log.appendLine('[comments] No threads to display');
             return;
         }
@@ -580,9 +636,9 @@ export class PrCommentController implements vscode.Disposable {
             // anchor those threads to the git-ref content URI (the same URI the
             // tree's "Show Changes" command opens for a delete).
             const relativePath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
-            const fileUri = this.isDeletedFile(relativePath) && this._targetRef
-                ? buildGitRefUri(relativePath, this._targetRef)
-                : vscode.Uri.joinPath(root, relativePath);
+            const isLeftSide = !azdoThread.threadContext?.rightFileStart && !!azdoThread.threadContext?.leftFileStart;
+            const fileUri = this.getReviewFileUri(relativePath, isLeftSide || this.isDeletedFile(relativePath) ? 'left' : 'right');
+            if (!fileUri) { continue; }
 
             // Determine line range from thread context
             const range = this.getRange(azdoThread);
@@ -647,6 +703,8 @@ export class PrCommentController implements vscode.Disposable {
 
         this._threads = newThreads;
         this._threadMetaMap = newMetaMap;
+
+        this.restoreCurrentPrDrafts();
 
         this.log.appendLine(`[comments] Incremental update: ${created} created, ${updated} updated, ${disposed} disposed`);
     }
@@ -824,13 +882,56 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     private disposeThreads(): void {
-        this.log.appendLine(`[comments] disposeThreads: disposing ${this._threads.length} threads, ${this._userDraftThreads.length} user drafts`);
+        this.log.appendLine(`[comments] disposeThreads: disposing ${this._threads.length} threads`);
         for (const t of this._threads) {
             t.dispose();
         }
         this._threads = [];
         this._threadMetaMap.clear();
-        this.clearUserDrafts();
+        this._replyDraftThreads.clear();
+        this._replyDraftBodies.clear();
+    }
+
+    private cacheRenderedDrafts(): void {
+        if (!this._prId || this._renderedDraftPrId !== this._prId) { return; }
+        this._draftsByPr.set(this._prId, this.serializeRenderedDrafts());
+    }
+
+    private clearRenderedDrafts(): void {
+        for (const thread of this._draftThreads) {
+            thread.dispose();
+        }
+        for (const thread of this._userDraftThreads) {
+            thread.dispose();
+        }
+        for (const [thread, info] of this._replyDraftThreads) {
+            thread.comments = thread.comments.slice(0, info.originalCommentCount);
+        }
+        this._draftThreads = [];
+        this._userDraftThreads = [];
+        this._userDraftPositions.clear();
+        this._replyDraftThreads.clear();
+        this._replyDraftBodies.clear();
+        this._renderedDraftPrId = undefined;
+    }
+
+    private restoreCurrentPrDrafts(): void {
+        if (!this._reviewMode || !this._prId) { return; }
+        const data = this._draftsByPr.get(this._prId);
+        if (!data) {
+            this._renderedDraftPrId = this._prId;
+            return;
+        }
+
+        let restored = 0;
+        if (this._renderedDraftPrId !== this._prId) {
+            this._renderedDraftPrId = this._prId;
+            restored += this.restoreStandaloneDrafts(data);
+        }
+        restored += this.restoreReplyDrafts(data.replyDrafts ?? []);
+        if (restored > 0) {
+            this.log.appendLine(`[comments] Restored ${restored} cached draft(s) for PR ${this._prId}`);
+        }
     }
 
     /**
@@ -848,10 +949,8 @@ export class PrCommentController implements vscode.Disposable {
      * The thread is styled differently and tracked separately from real AzDO threads.
      */
     createDraftThread(filePath: string, line: number, commentBody: string, type?: string): vscode.CommentThread | undefined {
-        const root = this._workspaceRoot;
-        if (!root) { return undefined; }
-
-        const fileUri = vscode.Uri.joinPath(root, filePath);
+        const fileUri = this.getReviewFileUri(filePath);
+        if (!fileUri) { return undefined; }
         const range = new vscode.Range(Math.max(0, line - 1), 0, Math.max(0, line - 1), 0);
 
         const typeLabel = type ? ` (${type})` : '';
@@ -884,6 +983,15 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Dispose all draft threads. */
     clearDrafts(): void {
+        if (this._prId && this._renderedDraftPrId !== this._prId) {
+            const cached = this._draftsByPr.get(this._prId);
+            if (cached?.aiDrafts.length) {
+                this._draftsByPr.set(this._prId, { ...cached, aiDrafts: [] });
+                this.log.appendLine(`[comments] Cleared ${cached.aiDrafts.length} hidden draft(s)`);
+                this._onDidPerformAction.fire();
+            }
+            return;
+        }
         for (const t of this._draftThreads) {
             t.dispose();
         }
@@ -985,9 +1093,7 @@ export class PrCommentController implements vscode.Disposable {
         const filePath = this.resolveFilePath(uri);
         this.log.appendLine(`[comments] createUserDraftThread: resolvedFilePath=${filePath ?? '(undefined)'}`);
         if (filePath) {
-            const side: 'left' | 'right' = (uri.scheme === GIT_CONTENT_SCHEME && this.isDeletedFile(filePath))
-                ? 'left'
-                : 'right';
+            const side = this.getUriSide(uri, filePath);
             this._userDraftPositions.set(thread, {
                 filePath,
                 startLine: range.start.line + 1,
@@ -1067,6 +1173,15 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Dispose all user draft threads. */
     clearUserDrafts(): void {
+        if (this._prId && this._renderedDraftPrId !== this._prId) {
+            const cached = this._draftsByPr.get(this._prId);
+            if (cached?.userDrafts.length) {
+                this._draftsByPr.set(this._prId, { ...cached, userDrafts: [] });
+                this.log.appendLine(`[comments] Cleared ${cached.userDrafts.length} hidden user draft(s)`);
+                this._onDidPerformAction.fire();
+            }
+            return;
+        }
         for (const t of this._userDraftThreads) {
             t.dispose();
         }
@@ -1197,9 +1312,9 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     dispose(): void {
+        this.cacheRenderedDrafts();
+        this.clearRenderedDrafts();
         this.disposeThreads();
-        this.clearDrafts();
-        this.clearUserDrafts();
         this._controller.dispose();
         this._onDidPerformAction.dispose();
         for (const d of this._disposables) {
@@ -1211,8 +1326,23 @@ export class PrCommentController implements vscode.Disposable {
     // Draft persistence — serialize/deserialize for workspace state
     // ------------------------------------------------------------------
 
-    /** Serialize all current drafts into a JSON-safe object for persistence. */
+    /** Serialize the active PR's drafts into a JSON-safe object for persistence. */
     serializeDrafts(): PersistedDrafts {
+        if (this._prId && this._renderedDraftPrId !== this._prId) {
+            return this._draftsByPr.get(this._prId) ?? emptyPersistedDrafts();
+        }
+        return this.serializeRenderedDrafts();
+    }
+
+    /** Return a snapshot for any PR, including one that is not currently rendered. */
+    serializeDraftsForPr(prId: number): PersistedDrafts {
+        if (prId === this._prId && this._renderedDraftPrId === prId) {
+            return this.serializeRenderedDrafts();
+        }
+        return this._draftsByPr.get(prId) ?? emptyPersistedDrafts();
+    }
+
+    private serializeRenderedDrafts(): PersistedDrafts {
         const aiDrafts: PersistedAiDraft[] = [];
         for (const thread of this._draftThreads) {
             const info = this.getDraftInfo(thread);
@@ -1257,8 +1387,19 @@ export class PrCommentController implements vscode.Disposable {
      * Call after PR context and threads are loaded so reply drafts can attach to existing threads.
      */
     restoreDrafts(data: PersistedDrafts): void {
-        let restored = 0;
+        if (this._prId) {
+            this.clearRenderedDrafts();
+            this._draftsByPr.set(this._prId, data);
+            this.restoreCurrentPrDrafts();
+            return;
+        }
 
+        const restored = this.restoreStandaloneDrafts(data) + this.restoreReplyDrafts(data.replyDrafts ?? []);
+        this.log.appendLine(`[comments] Restored ${restored} draft(s) from workspace state`);
+    }
+
+    private restoreStandaloneDrafts(data: PersistedDrafts): number {
+        let restored = 0;
         for (const d of data.aiDrafts ?? []) {
             if (this.createDraftThread(d.filePath, d.line, d.body, d.type)) {
                 restored++;
@@ -1266,13 +1407,10 @@ export class PrCommentController implements vscode.Disposable {
         }
 
         for (const d of data.userDrafts ?? []) {
-            const root = this._workspaceRoot;
-            if (!root) { continue; }
             // For drafts on deleted files (or any left-side draft) restore against
             // the git-ref URI so the draft re-attaches to the diff editor.
-            const fileUri = (d.side === 'left' && this._targetRef)
-                ? buildGitRefUri(d.filePath, this._targetRef)
-                : vscode.Uri.joinPath(root, d.filePath);
+            const fileUri = this.getReviewFileUri(d.filePath, d.side);
+            if (!fileUri) { continue; }
             const range = new vscode.Range(
                 Math.max(0, d.startLine - 1), Math.max(0, d.startCol - 1),
                 Math.max(0, d.endLine - 1), Math.max(0, d.endCol - 1),
@@ -1281,12 +1419,17 @@ export class PrCommentController implements vscode.Disposable {
             restored++;
         }
 
-        for (const d of data.replyDrafts ?? []) {
+        return restored;
+    }
+
+    private restoreReplyDrafts(replyDrafts: PersistedReplyDraft[]): number {
+        let restored = 0;
+        for (const d of replyDrafts) {
             const thread = this.findThreadByAzdoId(d.azdoThreadId);
             if (!thread) {
-                this.log.appendLine(`[comments] Cannot restore reply draft: AzDO thread ${d.azdoThreadId} not found`);
                 continue;
             }
+            if (this.hasReplyDraft(thread)) { continue; }
             if (d.authorName.includes('AI')) {
                 this.prefillReplyDraft(thread, d.body);
             } else {
@@ -1294,9 +1437,12 @@ export class PrCommentController implements vscode.Disposable {
             }
             restored++;
         }
-
-        this.log.appendLine(`[comments] Restored ${restored} draft(s) from workspace state`);
+        return restored;
     }
+}
+
+function emptyPersistedDrafts(): PersistedDrafts {
+    return { aiDrafts: [], userDrafts: [], replyDrafts: [] };
 }
 
 /** Serializable format for persisted drafts. */

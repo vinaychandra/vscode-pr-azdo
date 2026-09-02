@@ -9,18 +9,31 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
 - **Waiting for My Review** — see PRs assigned to you for review, grouped by your vote status (No vote yet, Approved, Waiting for author, etc.)
-- **Checkout** — click the checkout action or double-click a PR, then choose the current repository or the reusable detached review worktree for that checkout
+- **Review destination** — click the review action or double-click a PR, then choose the current repository, the reusable detached review worktree, or a no-checkout snapshot review
 - **Author display** — PR author's first name shown alongside the PR number
 - **Delete Branch** — remove the local branch after review from the Active PR sidebar
 
 ### Active Pull Request View
 
-When you're on a branch with an open PR, the extension automatically detects it and shows:
+When you're on a branch with an open PR, or when you select **Review Without Checkout** for any PR, the extension shows:
 
 - **File Changes** — folder tree of changed files with change type labels (Add, Edit, Delete, Rename)
 - **Reviewed checkboxes** — tick files and folders as reviewed; folder ticks recursively mark all children; state persists per-PR
 - **Commits** — list of commits in the PR
 - **Comment Threads** — inline and PR-level comments attached to each file
+
+### Review Without Checkout
+
+Choose **Review Without Checkout** from the **Review Pull Request** picker to review a PR without switching branches or creating a worktree:
+
+- Fetches the PR source and target commits into extension-owned Git refs
+- Leaves the working tree, index, current branch, `HEAD`, and ordinary local branches unchanged
+- Shows exact commit-to-commit diffs in read-only virtual documents
+- Supports inline comments, drafts, replies, thread status changes, votes, reviewed-file checkboxes, suggestions, and AI review
+- Remains pinned in the current VS Code window until you select another review or run **Stop No-Checkout Review**
+- Refresh fetches the latest source and target commits while preserving the local checkout
+
+Git object data and refs under `.git` are updated by the fetch. The selected no-checkout review is not restored after reloading VS Code.
 
 ### Inline Comments
 
@@ -53,14 +66,14 @@ When code has changed since a comment was made, click the **$(git-compare)** but
 
 ### Diff Views
 
-- **File diff** — compare any changed file against the target branch (`origin/main ↔ Working Copy`)
+- **File diff** — compare any changed file against the target branch and either the working copy or the exact fetched PR source commit
 - Supports Add, Delete, Edit, and Rename change types
 - Git ref content is fetched via `git show` and cached for performance
 
 ### PR Detail Panel
 
 - Webview showing PR metadata: title, description, author, reviewers with vote status, labels, work items, merge status, and auto-complete info
-- **Checkout Pull Request** button to check out the PR from the detail panel
+- **Review Pull Request** button to choose a current-repository, worktree, or no-checkout review from the detail panel
 - Direct link to the PR on Azure DevOps
 
 ### AI Assistant (`@azdo-pr`)
@@ -72,9 +85,9 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 - **`/review`** — full AI code review of all changed files with inline draft comments
 - **`/review-quick`** — high-level summary of PR changes and key concerns
 - **Context-aware review scope** — when your working tree is dirty or has unpushed commits, a QuickPick lets you choose exactly what to review: staged changes, unstaged changes, all uncommitted changes, unpushed commits only, or everything vs the remote target
-- **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change
+- **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change; applying requires a current-repository or worktree checkout because it edits local files
 - **Post Reply** button — post an AI-drafted reply directly to Azure DevOps; the reply is prefilled as an editable inline comment so you can review and edit it in context before posting
-- Uses workspace tools to read files and search symbols before responding — no guessing
+- Uses workspace tools for checked-out reviews and commit-backed read/search tools for no-checkout reviews
 - **Honors Copilot instruction files** — automatically reads `.github/copilot-instructions.md`, `**/.instructions.md`, and `.copilot/` directory contents before responding, so your repo-level and directory-scoped coding guidelines are respected
 - Customizable system prompts via settings (`vscode-pr-azdo.prompts.*`)
 
@@ -117,7 +130,8 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Toggle Review Mode`                       | Show/hide comments and gutter icons                  |
 | `Filter Comments`                          | Switch between Active and All comment threads        |
 | `Refresh`                                  | Re-fetch PR list or active PR data                   |
-| `Checkout Pull Request`                    | Choose where to check out a pull request              |
+| `Review Pull Request`                      | Choose a checkout, worktree, or no-checkout review    |
+| `Stop No-Checkout Review`                  | Return the Active PR view to current-branch detection |
 | `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
 | `Review with Copilot`                      | Start an AI code review of the active PR             |
 | `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |
@@ -125,8 +139,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 
 ## Known Issues
 
-- Comments on deleted files show as empty in the original context diff
-- The extension requires the repository to be fetched (`git fetch`) for original context diffs to resolve commit SHAs
+See [KnownIssues.md](KnownIssues.md) for the current list.
 
 ## Release Notes
 

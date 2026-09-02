@@ -68,6 +68,8 @@ export interface DiffParams {
  * @param repoRootUri  The URI of the repo root (for working-copy files)
  * @param targetRef    The git ref to diff against (e.g. `origin/main`)
  * @param targetBranch The display name of the target branch (e.g. `main`)
+ * @param sourceRef    Optional source commit/ref for a no-checkout review
+ * @param sourceBranch Optional source branch display name
  */
 export function buildDiffParams(
     relativePath: string,
@@ -75,13 +77,18 @@ export function buildDiffParams(
     repoRootUri: vscode.Uri,
     targetRef: string,
     targetBranch: string,
+    sourceRef?: string,
+    sourceBranch?: string,
 ): DiffParams {
     const fileName = relativePath.split('/').pop() ?? relativePath;
+    const rightUri = sourceRef
+        ? buildGitRefUri(relativePath, sourceRef)
+        : vscode.Uri.joinPath(repoRootUri, relativePath);
 
     if (changeType & VersionControlChangeType.Add) {
         return {
             leftUri: buildGitRefUri('__empty__', targetRef),
-            rightUri: vscode.Uri.joinPath(repoRootUri, relativePath),
+            rightUri,
             title: `${fileName} (Added)`,
         };
     }
@@ -94,7 +101,9 @@ export function buildDiffParams(
     }
     return {
         leftUri: buildGitRefUri(relativePath, targetRef),
-        rightUri: vscode.Uri.joinPath(repoRootUri, relativePath),
-        title: `${fileName} (${targetBranch} ↔ Working Copy)`,
+        rightUri,
+        title: sourceRef
+            ? `${fileName} (${targetBranch} ↔ ${sourceBranch ?? 'PR Source'})`
+            : `${fileName} (${targetBranch} ↔ Working Copy)`,
     };
 }

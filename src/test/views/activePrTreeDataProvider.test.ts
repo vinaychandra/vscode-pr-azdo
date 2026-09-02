@@ -1222,6 +1222,39 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         harness.dispose();
     });
 
+    test('pins a snapshot review across local branch changes', async () => {
+        let findCalls = 0;
+        const harness = makeMutableGitApi('local/main', 'local-commit');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    findCalls++;
+                    return undefined;
+                },
+            }),
+            harness.api,
+            createMockLog(),
+        );
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        const snapshotPr = { pullRequestId: 42, title: 'Snapshot review' } as GitPullRequest;
+        provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha');
+        const callsBeforeBranchChange = findCalls;
+        harness.setBranch('local/other');
+        harness.setCommit('other-commit');
+        harness.fireStateChange();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        assert.strictEqual(provider._activePrForContext?.pullRequestId, 42);
+        assert.strictEqual(provider.reviewContext?.mode, 'snapshot');
+        assert.strictEqual(provider.reviewContext?.sourceRef, 'source-sha');
+        assert.strictEqual(provider.reviewContext?.targetRef, 'target-sha');
+        assert.strictEqual(findCalls, callsBeforeBranchChange);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
     test('ignores an older branch lookup that resolves after a newer one', async () => {
         const firstPr = { pullRequestId: 1, title: 'First branch' } as GitPullRequest;
         const secondPr = { pullRequestId: 2, title: 'Second branch' } as GitPullRequest;

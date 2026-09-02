@@ -17,6 +17,13 @@ export interface PreparedReviewWorktree {
     reused: boolean;
 }
 
+export interface PullRequestSnapshot {
+    sourceCommit: string;
+    targetCommit: string;
+    sourceRef: string;
+    targetRef: string;
+}
+
 function git(cwd: string, args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
         execFile('git', args, { cwd, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -66,6 +73,35 @@ export async function fetchPullRequestCommit(repoRoot: string, remoteName: strin
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`Unable to fetch PR source ref ${sourceRefName} from ${remoteName}: ${msg}`);
+    }
+}
+
+/** Fetch both PR sides into extension-owned refs without changing HEAD or the working tree. */
+export async function fetchPullRequestSnapshot(
+    repoRoot: string,
+    remoteName: string,
+    pullRequestId: number,
+    sourceRefName: string,
+    targetRefName: string,
+): Promise<PullRequestSnapshot> {
+    const refRoot = `refs/vscode-pr-azdo/pull/${pullRequestId}`;
+    const sourceRef = `${refRoot}/source`;
+    const targetRef = `${refRoot}/target`;
+
+    try {
+        await git(repoRoot, [
+            'fetch', '--no-tags', remoteName,
+            `+${sourceRefName}:${sourceRef}`,
+            `+${targetRefName}:${targetRef}`,
+        ]);
+        const [sourceCommit, targetCommit] = await Promise.all([
+            git(repoRoot, ['rev-parse', `${sourceRef}^{commit}`]),
+            git(repoRoot, ['rev-parse', `${targetRef}^{commit}`]),
+        ]);
+        return { sourceCommit, targetCommit, sourceRef, targetRef };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Unable to fetch PR #${pullRequestId} snapshot from ${remoteName}: ${msg}`);
     }
 }
 

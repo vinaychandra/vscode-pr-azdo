@@ -8,6 +8,7 @@ import {
     DEFAULT_REVIEW_WORKTREE_PATH,
     DirtyReviewWorktreeError,
     fetchPullRequestCommit,
+    fetchPullRequestSnapshot,
     getPrimaryWorktreeRoot,
     parseWorktreePaths,
     prepareReviewWorktree,
@@ -170,5 +171,33 @@ suite('reviewWorktree', () => {
             fetchPullRequestCommit(clone, 'origin', 'refs/heads/missing'),
             /Unable to fetch PR source ref refs\/heads\/missing from origin/,
         );
+    });
+
+    test('fetches a PR snapshot without changing the checkout', async () => {
+        const remote = createRepository();
+        cleanup.push(remote);
+        git(remote, 'branch', '-M', 'main');
+        git(remote, 'checkout', '-b', 'feature/test');
+        fs.writeFileSync(path.join(remote, 'file.txt'), 'feature');
+        git(remote, 'add', 'file.txt');
+        git(remote, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'feature');
+
+        const clone = createRepository();
+        cleanup.push(clone);
+        git(clone, 'remote', 'add', 'origin', remote);
+        fs.writeFileSync(path.join(clone, 'file.txt'), 'dirty working copy');
+        const headBefore = git(clone, 'rev-parse', 'HEAD');
+        const branchBefore = git(clone, 'branch', '--show-current');
+
+        const snapshot = await fetchPullRequestSnapshot(
+            clone, 'origin', 42, 'refs/heads/feature/test', 'refs/heads/main',
+        );
+
+        assert.strictEqual(snapshot.sourceCommit, git(remote, 'rev-parse', 'feature/test'));
+        assert.strictEqual(snapshot.targetCommit, git(remote, 'rev-parse', 'main'));
+        assert.strictEqual(git(clone, 'rev-parse', 'HEAD'), headBefore);
+        assert.strictEqual(git(clone, 'branch', '--show-current'), branchBefore);
+        assert.strictEqual(fs.readFileSync(path.join(clone, 'file.txt'), 'utf-8'), 'dirty working copy');
+        assert.strictEqual(git(clone, 'branch', '--list', 'feature/test'), '');
     });
 });

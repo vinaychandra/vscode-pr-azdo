@@ -8,6 +8,7 @@ import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
 import { type ReviewMode, buildGitDiffArgs, reviewModeLabel } from '../git/gitStateDetector';
+import { buildGitRefUri } from '../views/gitRefContentProvider';
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
 
@@ -22,9 +23,10 @@ const BLOCKED_TOOL_NAMES = new Set([
 
 const MAX_TOOLS = 128;
 
-function getChatTools(): { name: string; description: string; inputSchema: object }[] {
+function getChatTools(snapshotReview = false): { name: string; description: string; inputSchema: object }[] {
     const all = vscode.lm.tools
         .filter(t => !BLOCKED_TOOL_NAMES.has(t.name))
+        .filter(t => !snapshotReview || t.name.startsWith('vscode-pr-azdo_'))
         .map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? {} }));
     if (all.length > MAX_TOOLS) {
         void vscode.window.showWarningMessage(
@@ -213,7 +215,7 @@ export function registerPrChatParticipant(
         // Tell the LM the workspace root so it uses absolute paths with tools
         const repoRoot = getRepoRoot();
         const wsRoot = repoRoot?.fsPath;
-        if (wsRoot) {
+        if (wsRoot && !contextProvider.isSnapshotReview) {
             messages.push(vscode.LanguageModelChatMessage.User(
                 `The workspace root is: ${wsRoot}\nIMPORTANT: When calling tools like copilot_readFile, use ABSOLUTE paths by prepending the workspace root. For example, to read src/index.ts, use ${wsRoot}/src/index.ts`,
             ));
@@ -232,7 +234,7 @@ export function registerPrChatParticipant(
                 if (workspaceRoot) {
                     // Prefer the file at the original iteration commit over the working copy,
                     // since the code may have changed since the comment was made.
-                    const sourceCommit = contextProvider.resolveSourceCommit(commentCtx.thread);
+                    const sourceCommit = contextProvider.resolveCommentCommit(commentCtx.thread);
                     let text = '';
                     if (sourceCommit) {
                         const fileContent = await gitShowText(workspaceRoot.fsPath, sourceCommit, commentCtx.filePath);
@@ -256,7 +258,7 @@ export function registerPrChatParticipant(
                         }
                     }
                     // Fall back to working copy if original context unavailable
-                    if (!text) {
+                    if (!text && !contextProvider.isSnapshotReview) {
                         const fileUri = vscode.Uri.joinPath(workspaceRoot, commentCtx.filePath);
                         const doc = await vscode.workspace.openTextDocument(fileUri);
                         const range = new vscode.Range(
@@ -282,9 +284,10 @@ export function registerPrChatParticipant(
             log.appendLine(`[chat] Using stored comment context: ${commentCtx.filePath} L${commentCtx.startLine}:${commentCtx.startCol}-L${commentCtx.endLine}:${commentCtx.endCol}${targetedTextHint ? ' (with targeted text)' : ''}`);
 
             // Add file reference
-            stream.reference(vscode.Uri.file(
-                (getRepoRoot()?.fsPath ?? '') + '/' + commentCtx.filePath,
-            ));
+            const referenceCommit = contextProvider.resolveCommentCommit(commentCtx.thread);
+            stream.reference(referenceCommit
+                ? buildGitRefUri(commentCtx.filePath, referenceCommit)
+                : vscode.Uri.file((getRepoRoot()?.fsPath ?? '') + '/' + commentCtx.filePath));
         }
 
         // Add PR metadata
@@ -327,7 +330,7 @@ export function registerPrChatParticipant(
 
         try {
             // Only expose tools that work without toolInvocationToken
-            const tools = getChatTools();
+            const tools = getChatTools(contextProvider.isSnapshotReview);
 
             const response = await request.model.sendRequest(messages, {
                 justification: 'Resolving a PR comment',
@@ -407,7 +410,7 @@ export function registerPrChatParticipant(
                 );
                 const aiResponseHasCodeFix = /```[\w]*\n[\s\S]+?\n```/.test(fullResponseText);
 
-                if (hasAzdoSuggestion || aiResponseHasCodeFix) {
+                if (!contextProvider.isSnapshotReview && (hasAzdoSuggestion || aiResponseHasCodeFix)) {
                     stream.markdown('\n\n---\n');
                     stream.button({
                         command: 'vscode-pr-azdo.applySuggestion',
@@ -677,12 +680,13 @@ async function handleReview(
 
     // Parse --mode=<mode> from the prompt
     const { mode, cleanPrompt: extraInstructions } = parseReviewMode(request.prompt);
-    const reviewMode: ReviewMode = mode ?? 'vs-target';
+    const reviewMode: ReviewMode = contextProvider.isSnapshotReview ? 'vs-target' : (mode ?? 'vs-target');
 
     // Get the diff against the target branch
     const pr = contextProvider.activePr;
     const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
-    const targetRef = `origin/${targetBranch}`;
+    const targetRef = contextProvider.targetRef ?? `origin/${targetBranch}`;
+    const sourceRef = contextProvider.isSnapshotReview ? contextProvider.sourceRef : undefined;
     const cwd = workspaceRoot.fsPath;
     const currentBranch = activeRepo?.state.HEAD?.name;
     const currentBranchRef = currentBranch ? `origin/${currentBranch}` : undefined;
@@ -696,7 +700,7 @@ async function handleReview(
 
     let diffOutput: string;
     try {
-        diffOutput = await runGitDiff(cwd, targetRef, diffFilePaths, reviewMode, currentBranchRef);
+        diffOutput = await runGitDiff(cwd, targetRef, diffFilePaths, reviewMode, currentBranchRef, sourceRef);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.appendLine(`[chat/review] git diff failed: ${msg}`);
@@ -719,9 +723,15 @@ async function handleReview(
     ];
 
     // Tell the LM the workspace root so it uses absolute paths with tools
-    if (cwd) {
+    if (cwd && !contextProvider.isSnapshotReview) {
         messages.push(vscode.LanguageModelChatMessage.User(
             `The workspace root is: ${cwd}\nIMPORTANT: When calling tools like copilot_readFile, use ABSOLUTE paths by prepending the workspace root. For example, to read src/index.ts, use ${cwd}/src/index.ts`,
+        ));
+    }
+
+    if (contextProvider.isSnapshotReview) {
+        messages.push(vscode.LanguageModelChatMessage.User(
+            'This pull request is being reviewed without checkout. The supplied diff and vscode-pr-azdo snapshot tools read the exact PR source commit. Do not use workspace file tools because the current working tree is unrelated to this pull request.',
         ));
     }
 
@@ -735,7 +745,7 @@ async function handleReview(
 
     try {
         // Only expose tools that work without toolInvocationToken
-        const tools = getChatTools();
+        const tools = getChatTools(contextProvider.isSnapshotReview);
 
         const response = await request.model.sendRequest(messages, {
             justification: 'Reviewing PR changes',
@@ -846,12 +856,9 @@ export function runGitDiff(
     filePaths: string[],
     mode?: ReviewMode,
     currentBranchRef?: string,
+    sourceRef?: string,
 ): Promise<string> {
-    const args = mode
-        ? buildGitDiffArgs(mode, targetRef, currentBranchRef, filePaths)
-        : (filePaths.length > 0
-            ? ['diff', targetRef, '--', ...filePaths]
-            : ['diff', targetRef]);
+    const args = buildReviewDiffArgs(targetRef, filePaths, mode, currentBranchRef, sourceRef);
 
     return new Promise((resolve, reject) => {
         execFile(
@@ -867,6 +874,22 @@ export function runGitDiff(
             },
         );
     });
+}
+
+export function buildReviewDiffArgs(
+    targetRef: string,
+    filePaths: string[],
+    mode?: ReviewMode,
+    currentBranchRef?: string,
+    sourceRef?: string,
+): string[] {
+    return sourceRef
+        ? ['diff', targetRef, sourceRef, '--', ...filePaths]
+        : mode
+            ? buildGitDiffArgs(mode, targetRef, currentBranchRef, filePaths)
+            : (filePaths.length > 0
+                ? ['diff', targetRef, '--', ...filePaths]
+                : ['diff', targetRef]);
 }
 
 /**

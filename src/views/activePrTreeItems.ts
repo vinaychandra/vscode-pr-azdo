@@ -8,9 +8,9 @@ import { hasSuggestion, extractSuggestion, extractCommentText } from './suggesti
 // ---------------------------------------------------------------------------
 
 export class ActivePrRootItem extends vscode.TreeItem {
-    constructor(public readonly pr: GitPullRequest) {
+    constructor(public readonly pr: GitPullRequest, snapshotReview = false) {
         super(pr.title ?? '(untitled)', vscode.TreeItemCollapsibleState.Expanded);
-        this.description = `#${pr.pullRequestId}`;
+        this.description = snapshotReview ? `#${pr.pullRequestId} · No Checkout` : `#${pr.pullRequestId}`;
         this.iconPath = new vscode.ThemeIcon(
             pr.isDraft ? 'git-pull-request-draft' : 'git-pull-request',
         );

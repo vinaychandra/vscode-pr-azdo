@@ -29,6 +29,9 @@ export class PrContextProvider {
     private _activePr: GitPullRequest | undefined;
     private _changedFilePaths: string[] = [];
     private _iterations: GitPullRequestIteration[] = [];
+    private _reviewMode: 'workingTree' | 'snapshot' = 'workingTree';
+    private _sourceRef: string | undefined;
+    private _targetRef: string | undefined;
 
     /** Set the active comment context (called when the sparkle button is clicked). */
     setCommentContext(ctx: CommentContext | undefined): void {
@@ -48,10 +51,18 @@ export class PrContextProvider {
     }
 
     /** Update the active PR metadata. */
-    setActivePr(pr: GitPullRequest | undefined, changedFilePaths?: string[], iterations?: GitPullRequestIteration[]): void {
+    setActivePr(
+        pr: GitPullRequest | undefined,
+        changedFilePaths?: string[],
+        iterations?: GitPullRequestIteration[],
+        reviewContext?: { mode: 'workingTree' | 'snapshot'; sourceRef?: string; targetRef?: string },
+    ): void {
         this._activePr = pr;
         this._changedFilePaths = changedFilePaths ?? [];
         this._iterations = iterations ?? [];
+        this._reviewMode = reviewContext?.mode ?? 'workingTree';
+        this._sourceRef = reviewContext?.sourceRef;
+        this._targetRef = reviewContext?.targetRef;
     }
 
     get activePr(): GitPullRequest | undefined {
@@ -66,6 +77,18 @@ export class PrContextProvider {
         return this._iterations;
     }
 
+    get isSnapshotReview(): boolean {
+        return this._reviewMode === 'snapshot';
+    }
+
+    get sourceRef(): string | undefined {
+        return this._sourceRef;
+    }
+
+    get targetRef(): string | undefined {
+        return this._targetRef;
+    }
+
     /**
      * Resolve the source commit SHA for the iteration in which a comment was made.
      * Returns undefined if iteration info is not available.
@@ -76,6 +99,20 @@ export class PrContextProvider {
         if (!iterationId) { return undefined; }
         const iteration = this._iterations.find(i => i.id === iterationId);
         return iteration?.sourceRefCommit?.commitId;
+    }
+
+    /** Resolve the commit containing the side on which a comment was created. */
+    resolveCommentCommit(thread: GitPullRequestCommentThread): string | undefined {
+        const prCtx = (thread as any).pullRequestThreadContext;
+        const iterationId = prCtx?.iterationContext?.secondComparingIteration;
+        const iteration = this._iterations.find(i => i.id === iterationId);
+        const leftOnly = !thread.threadContext?.rightFileStart && !!thread.threadContext?.leftFileStart;
+        if (leftOnly) {
+            return iteration?.targetRefCommit?.commitId
+                ?? iteration?.commonRefCommit?.commitId
+                ?? this._targetRef;
+        }
+        return iteration?.sourceRefCommit?.commitId ?? this._sourceRef;
     }
 
     /**

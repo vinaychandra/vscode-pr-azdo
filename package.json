@@ -119,8 +119,13 @@
       },
       {
         "command": "vscode-pr-azdo.checkoutPullRequest",
-        "title": "Checkout Pull Request",
+        "title": "Review Pull Request",
         "icon": "$(arrow-down)"
+      },
+      {
+        "command": "vscode-pr-azdo.stopReview",
+        "title": "Stop No-Checkout Review",
+        "icon": "$(close)"
       },
       {
         "command": "vscode-pr-azdo.toggleReviewMode",
@@ -268,7 +273,7 @@
       "editor/title": [
         {
           "command": "vscode-pr-azdo.toggleFileDiff",
-          "when": "vscode-pr-azdo:hasActivePr && vscode-pr-azdo:activeEditorInPr && !isInDiffEditor && resourceScheme == file",
+          "when": "vscode-pr-azdo:hasActivePr && vscode-pr-azdo:activeEditorInPr && !isInDiffEditor && (resourceScheme == file || resourceScheme == azdo-pr-git)",
           "group": "navigation@10"
         },
         {
@@ -322,6 +327,11 @@
           "command": "vscode-pr-azdo.expandAll",
           "when": "view == azdo-pr.activePr && vscode-pr-azdo:hasActivePr",
           "group": "navigation@99"
+        },
+        {
+          "command": "vscode-pr-azdo.stopReview",
+          "when": "view == azdo-pr.activePr && vscode-pr-azdo:snapshotReview",
+          "group": "navigation@100"
         }
       ],
       "view/item/context": [
@@ -332,7 +342,7 @@
         },
         {
           "command": "vscode-pr-azdo.deleteBranch",
-          "when": "viewItem == activePr",
+          "when": "viewItem == activePr && !vscode-pr-azdo:snapshotReview",
           "group": "inline"
         },
         {
@@ -532,6 +542,42 @@
               "description": "Number of extra context lines before and after the comment range. Default 20."
             }
           }
+        }
+      },
+      {
+        "name": "vscode-pr-azdo_readSnapshotFile",
+        "displayName": "Read PR Snapshot File",
+        "modelDescription": "Reads a relative file path from the exact source commit of the active no-checkout pull request review.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Repository-relative file path to read."
+            }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "vscode-pr-azdo_searchSnapshot",
+        "displayName": "Search PR Snapshot",
+        "modelDescription": "Searches text in the exact source commit of the active no-checkout pull request review.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Text or pattern to search for."
+            },
+            "path": {
+              "type": "string",
+              "description": "Optional repository-relative path to limit the search."
+            }
+          },
+          "required": ["query"]
         }
       }
     ],

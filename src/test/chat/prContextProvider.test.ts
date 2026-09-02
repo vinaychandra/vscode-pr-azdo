@@ -97,6 +97,17 @@ suite('PrContextProvider — PR Context', () => {
         assert.strictEqual(provider.activePr, undefined);
         assert.deepStrictEqual(provider.changedFilePaths, []);
     });
+
+    test('stores no-checkout snapshot refs', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), ['a.ts'], [], {
+            mode: 'snapshot', sourceRef: 'source-sha', targetRef: 'target-sha',
+        });
+
+        assert.strictEqual(provider.isSnapshotReview, true);
+        assert.strictEqual(provider.sourceRef, 'source-sha');
+        assert.strictEqual(provider.targetRef, 'target-sha');
+    });
 });
 
 suite('PrContextProvider — formatThreadForPrompt', () => {
@@ -241,5 +252,28 @@ suite('PrContextProvider — resolveSourceCommit', () => {
         const iterations = [{ id: 1 } as any, { id: 2 } as any];
         provider.setActivePr(makePr(), ['a.ts'], iterations);
         assert.deepStrictEqual(provider.iterations, iterations);
+    });
+
+    test('resolves a right-side comment to the snapshot source ref', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [], {
+            mode: 'snapshot', sourceRef: 'source-sha', targetRef: 'target-sha',
+        });
+        assert.strictEqual(provider.resolveCommentCommit(makeThread()), 'source-sha');
+    });
+
+    test('resolves a left-side comment to the snapshot target ref', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [], {
+            mode: 'snapshot', sourceRef: 'source-sha', targetRef: 'target-sha',
+        });
+        const thread = makeThread({
+            threadContext: {
+                filePath: '/src/index.ts',
+                leftFileStart: { line: 10, offset: 1 },
+                leftFileEnd: { line: 10, offset: 1 },
+            },
+        });
+        assert.strictEqual(provider.resolveCommentCommit(thread), 'target-sha');
     });
 });

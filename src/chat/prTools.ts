@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
+import { execFile } from 'child_process';
 import type { PrContextProvider } from './prContextProvider';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
+import { buildGitRefUri } from '../views/gitRefContentProvider';
 
 /**
  * Register custom LM tools that provide PR-specific context to the language model.
@@ -68,7 +70,10 @@ export function registerPrTools(
                     ]);
                 }
 
-                const fileUri = vscode.Uri.joinPath(workspaceRoot, ctx.filePath);
+                const commit = contextProvider.resolveCommentCommit(ctx.thread);
+                const fileUri = commit
+                    ? buildGitRefUri(ctx.filePath, commit)
+                    : vscode.Uri.joinPath(workspaceRoot, ctx.filePath);
                 try {
                     const doc = await vscode.workspace.openTextDocument(fileUri);
                     const startLine = Math.max(0, ctx.startLine - 1 - extra);
@@ -96,5 +101,64 @@ export function registerPrTools(
         }),
     );
 
-    log.appendLine('[tools] Registered 3 PR-specific LM tools');
+    context.subscriptions.push(
+        vscode.lm.registerTool('vscode-pr-azdo_readSnapshotFile', {
+            async invoke(options: vscode.LanguageModelToolInvocationOptions<{ path: string }>, _token) {
+                const sourceRef = contextProvider.sourceRef;
+                const filePath = normalizeSnapshotPath(options.input.path);
+                if (!contextProvider.isSnapshotReview || !sourceRef || !filePath) {
+                    return textResult('No active no-checkout review or invalid relative file path.');
+                }
+                try {
+                    const doc = await vscode.workspace.openTextDocument(buildGitRefUri(filePath, sourceRef));
+                    return textResult(`File: ${filePath}\n\n${doc.getText()}`);
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    return textResult(`Error reading PR snapshot file: ${msg}`);
+                }
+            },
+        }),
+    );
+
+    context.subscriptions.push(
+        vscode.lm.registerTool('vscode-pr-azdo_searchSnapshot', {
+            async invoke(options: vscode.LanguageModelToolInvocationOptions<{ query: string; path?: string }>, _token) {
+                const sourceRef = contextProvider.sourceRef;
+                const repoRoot = (detector ? getActiveRepository(gitApi, detector) : gitApi?.repositories[0])?.rootUri.fsPath;
+                const query = options.input.query?.trim();
+                const searchPath = options.input.path ? normalizeSnapshotPath(options.input.path) : undefined;
+                if (!contextProvider.isSnapshotReview || !sourceRef || !repoRoot || !query || (options.input.path && !searchPath)) {
+                    return textResult('No active no-checkout review or invalid search input.');
+                }
+                const output = await gitGrep(repoRoot, sourceRef, query, searchPath);
+                return textResult(output || 'No matches in the PR source snapshot.');
+            },
+        }),
+    );
+
+    log.appendLine('[tools] Registered 5 PR-specific LM tools');
+}
+
+function textResult(text: string): vscode.LanguageModelToolResult {
+    return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)]);
+}
+
+function normalizeSnapshotPath(value: string | undefined): string | undefined {
+    const normalized = value?.trim().replaceAll('\\', '/').replace(/^\/+/, '');
+    if (!normalized || normalized.split('/').includes('..')) { return undefined; }
+    return normalized;
+}
+
+function gitGrep(cwd: string, ref: string, query: string, searchPath?: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const args = ['grep', '-n', '--no-color', '-I', '-e', query, ref];
+        if (searchPath) { args.push('--', searchPath); }
+        execFile('git', args, { cwd, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+            if (err && (err as NodeJS.ErrnoException & { code?: number }).code !== 1) {
+                reject(err);
+            } else {
+                resolve(stdout.slice(0, 200_000));
+            }
+        });
+    });
 }
