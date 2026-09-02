@@ -333,6 +333,9 @@ export async function activate(context: vscode.ExtensionContext) {
 			// If a cached token exists it will be reused; otherwise tree views
 			// will show a "Sign In" item and the user can authenticate on demand.
 			const userIdPromise = apiClient.tryConnectSilently().then(connected => {
+				void vscode.commands.executeCommand(
+					'setContext', 'vscode-pr-azdo:isAuthenticated', connected,
+				);
 				if (!connected) {
 					outputChannel.appendLine('[ext] Silent auth unavailable — sign-in deferred until user action.');
 					// Fire so tree views render the "Sign In" item
@@ -364,6 +367,15 @@ export async function activate(context: vscode.ExtensionContext) {
 					}
 					return undefined;
 				});
+			}).catch(err => {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[ext] Silent auth failed unexpectedly: ${msg}`);
+				void vscode.commands.executeCommand(
+					'setContext', 'vscode-pr-azdo:isAuthenticated', false,
+				);
+				proxyEmitter.fire();
+				activePrProxyEmitter.fire();
+				return undefined;
 			});
 
 			prService = new PullRequestService(apiClient, info);
@@ -381,6 +393,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				// Try to reconnect silently (VS Code may have refreshed the token).
 				// If that fails, just update the UI so "Sign In" items appear.
 				void apiClient?.tryConnectSilently().then(connected => {
+					void vscode.commands.executeCommand(
+						'setContext', 'vscode-pr-azdo:isAuthenticated', connected,
+					);
 					if (connected) {
 						outputChannel.appendLine('[ext] Silent re-auth succeeded.');
 						// Re-fire so tree views refresh with real data
@@ -394,6 +409,14 @@ export async function activate(context: vscode.ExtensionContext) {
 							'Azure DevOps PR: Session expired. Click "Sign In" in the panel to re-authenticate.',
 						);
 					}
+				}).catch(err => {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[ext] Silent re-auth failed unexpectedly: ${msg}`);
+					void vscode.commands.executeCommand(
+						'setContext', 'vscode-pr-azdo:isAuthenticated', false,
+					);
+					proxyEmitter.fire();
+					activePrProxyEmitter.fire();
 				});
 			};
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel, handleAuthError);

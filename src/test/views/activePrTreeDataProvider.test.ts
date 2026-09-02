@@ -1222,6 +1222,74 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         harness.dispose();
     });
 
+    test('ignores an older branch lookup that resolves after a newer one', async () => {
+        const firstPr = { pullRequestId: 1, title: 'First branch' } as GitPullRequest;
+        const secondPr = { pullRequestId: 2, title: 'Second branch' } as GitPullRequest;
+        let resolveFirst!: (pr: GitPullRequest) => void;
+        const firstLookup = new Promise<GitPullRequest>(resolve => {
+            resolveFirst = resolve;
+        });
+        const harness = makeMutableGitApi('feature/first');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: branchName => branchName === 'feature/first'
+                    ? firstLookup
+                    : Promise.resolve(secondPr),
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 0));
+        harness.setBranch('feature/second');
+        await provider.detectActivePr();
+        assert.strictEqual(provider._activePrForContext?.pullRequestId, 2);
+
+        resolveFirst(firstPr);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.strictEqual(provider._activePrForContext?.pullRequestId, 2);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('ignores data loaded for a PR that is no longer active', async () => {
+        const firstPr = { pullRequestId: 1, title: 'First branch' } as GitPullRequest;
+        const secondPr = { pullRequestId: 2, title: 'Second branch' } as GitPullRequest;
+        let resolveFirstIterations!: (iterations: { id: number }[]) => void;
+        const firstIterations = new Promise<{ id: number }[]>(resolve => {
+            resolveFirstIterations = resolve;
+        });
+        const harness = makeMutableGitApi('feature/first');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async branchName => branchName === 'feature/first' ? firstPr : secondPr,
+                getPrIterations: async prId => prId === 1 ? firstIterations as any : [],
+                getPrIterationChanges: async () => ({
+                    changeEntries: [{ item: { path: '/stale.ts' }, changeType: VersionControlChangeType.Edit } as any],
+                }),
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        await provider.detectActivePr();
+        const firstRoot = (await provider.getChildren()).find(item => item instanceof ActivePrRootItem);
+        assert.ok(firstRoot);
+        const staleLoad = provider.getChildren(firstRoot);
+
+        harness.setBranch('feature/second');
+        await provider.detectActivePr();
+        resolveFirstIterations([{ id: 1 }]);
+        await staleLoad;
+
+        assert.strictEqual(provider._activePrForContext?.pullRequestId, 2);
+        assert.deepStrictEqual(provider.changedFilePaths, []);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
     test('re-detects when the commit changes on the same branch', async () => {
         let commitLookups = 0;
         const harness = makeMutableGitApi('feature/abc', 'commit-1');

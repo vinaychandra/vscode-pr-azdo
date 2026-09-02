@@ -26,7 +26,7 @@ export function extractSuggestion(content: string): string | undefined {
     const match = content.match(SUGGESTION_RE);
     if (!match) { return undefined; }
     // Remove trailing newline that's part of the fence
-    return match[1].replace(/\n$/, '');
+    return match[1].replaceAll('\r\n', '\n').replace(/\n$/, '');
 }
 
 /**
@@ -54,7 +54,7 @@ export function renderSuggestionAsDiff(
     commentText?: string,
     replacedLines?: string[],
 ): string {
-    const addedLines = replacedLines ?? suggestedCode.split('\n');
+    const addedLines = replacedLines ?? suggestedCode.split(/\r?\n/);
 
     const diffLines: string[] = [];
 

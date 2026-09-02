@@ -10,6 +10,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - **Reusable review worktree checkout** — each checkout action lets you choose between the current repository and one detached review worktree. The default sibling path is `<repo>.worktrees/review`, it can be customized in settings, and clean worktrees are reused when switching reviews. Dirty review worktrees are left untouched.
 
+### Fixed
+
+- **Stale active PR data after rapid branch switches** — overlapping PR detection and data-loading requests can no longer let an older branch overwrite the current PR or populate it with another PR's files and comments.
+- **Authentication welcome-state drift** — silent sign-in and recovery now keep the `isAuthenticated` context key synchronized with the actual connection result.
+- **Windows file resolution and suggestion line endings** — repository paths are matched case-insensitively on Windows, and CRLF suggestion blocks render without stray carriage returns.
+
 ## [0.0.12]
 
 ### Added

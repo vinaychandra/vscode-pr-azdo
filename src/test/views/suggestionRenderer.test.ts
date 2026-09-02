@@ -48,6 +48,11 @@ suite('extractSuggestion', () => {
         const result = extractSuggestion('```suggestion  \ncode\n```');
         assert.strictEqual(result, 'code');
     });
+
+    test('normalizes CRLF line endings', () => {
+        const result = extractSuggestion('```suggestion\r\nline1\r\nline2\r\n```');
+        assert.strictEqual(result, 'line1\nline2');
+    });
 });
 
 suite('extractCommentText', () => {
@@ -86,6 +91,15 @@ suite('renderSuggestionAsDiff', () => {
         assert.ok(result.includes('- line2'));
         assert.ok(result.includes('+ newLine1'));
         assert.ok(result.includes('+ newLine2'));
+    });
+
+    test('renders CRLF suggestions without carriage returns', () => {
+        const result = renderSuggestionAsDiff(
+            ['old'],
+            'newLine1\r\nnewLine2',
+        );
+        assert.ok(result.includes('+ newLine1\n+ newLine2'));
+        assert.ok(!result.includes('\r'));
     });
 
     test('includes comment text when provided', () => {

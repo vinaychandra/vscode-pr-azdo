@@ -7,6 +7,7 @@ import { GIT_CONTENT_SCHEME, buildGitRefUri } from './gitRefContentProvider';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
+import { computeRelativePath, extractPathFromGitRefUri } from './toggleFileDiffHelpers';
 
 /** URI scheme for the virtual PR-level comments document. */
 export const PR_COMMENTS_SCHEME = 'azdo-pr-comments';
@@ -165,20 +166,12 @@ export class PrCommentController implements vscode.Disposable {
         const uri = document.uri;
         // Support both working file:// and azdo-pr-git:// scheme
         if (uri.scheme === 'file') {
-            // Compute path relative to repo root (not workspace folder)
-            const rootPath = root.path;
-            const filePath = uri.path;
-            if (filePath.startsWith(rootPath + '/')) {
-                const relative = filePath.substring(rootPath.length + 1);
-                return this._prFilePaths.has(relative);
-            }
-            // Fallback: try workspace-relative
-            const relative = vscode.workspace.asRelativePath(uri, false);
-            return this._prFilePaths.has(relative);
+            const relative = computeRelativePath(uri, root);
+            return relative !== undefined && this._prFilePaths.has(relative);
         }
         if (uri.scheme === GIT_CONTENT_SCHEME) {
-            const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
-            return path !== '__empty__' && this._prFilePaths.has(path);
+            const relative = extractPathFromGitRefUri(uri);
+            return relative !== undefined && this._prFilePaths.has(relative);
         }
         return false;
     }
@@ -322,19 +315,10 @@ export class PrCommentController implements vscode.Disposable {
         if (uri.scheme === 'file') {
             // Use repo root for relative path, not workspace folder
             const root = this._workspaceRoot;
-            if (root) {
-                const rootPath = root.path;
-                const filePath = uri.path;
-                if (filePath.startsWith(rootPath + '/')) {
-                    return filePath.substring(rootPath.length + 1);
-                }
-            }
-            // Fallback to workspace-relative
-            return vscode.workspace.asRelativePath(uri, false);
+            return root ? computeRelativePath(uri, root) : undefined;
         }
         if (uri.scheme === GIT_CONTENT_SCHEME) {
-            const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
-            return path === '__empty__' ? undefined : path;
+            return extractPathFromGitRefUri(uri);
         }
         return undefined;
     }

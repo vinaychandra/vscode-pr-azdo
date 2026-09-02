@@ -40,6 +40,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     /** Branch name observed at the last detectActivePr run; used to skip work on identical state changes. */
     private _lastDetectedBranch: string | undefined;
     private _lastDetectedCommit: string | undefined;
+    private _detectionGeneration = 0;
+    private _activePrGeneration = 0;
     private _fileTree: (FolderItem | FileChangeItem)[] | undefined;
     private _commits: GitCommitRef[] | undefined;
     /** All user-visible threads (cached from API, never cleared by filter change). */
@@ -266,6 +268,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
     /** Re-detect the active PR for the current branch and refresh the tree. */
     async detectActivePr(): Promise<void> {
+        const generation = ++this._detectionGeneration;
+
         // Skip detection when not authenticated — avoids triggering login prompts
         if (!this.prService.isConnected) {
             this.log.appendLine('[active-pr] Skipping PR detection (not authenticated).');
@@ -296,6 +300,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 matchedBy = 'commit';
                 pr = await this.prService.findPrForCommit(commitId);
             }
+            if (generation !== this._detectionGeneration) {
+                this.log.appendLine('[active-pr] Discarding stale PR detection result.');
+                return;
+            }
             this.log.appendLine(
                 pr
                     ? `[active-pr] Found PR #${pr.pullRequestId}: ${pr.title} (matched by ${matchedBy})`
@@ -303,6 +311,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             );
             this.setActivePr(pr);
         } catch (err) {
+            if (generation !== this._detectionGeneration) {
+                this.log.appendLine('[active-pr] Discarding stale PR detection error.');
+                return;
+            }
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error detecting PR: ${msg}`);
             if (isAuthError(err)) {
@@ -313,6 +325,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     refresh(): void {
+        this._activePrGeneration++;
         this._fileTree = undefined;
         this._commits = undefined;
         this._allThreads = undefined;
@@ -331,9 +344,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     async refreshThreadsOnly(): Promise<void> {
         const prId = this._activePr?.pullRequestId;
         if (!prId) { return; }
+        const generation = this._activePrGeneration;
 
         this._allThreads = undefined; // clear so loadThreads re-fetches
-        await this.loadThreads(prId);
+        await this.loadThreads(prId, generation);
+        if (!this.isCurrentPr(prId, generation)) { return; }
         this.rebuildCommentsFromCache();
         this._onDidChangeTreeData.fire();
         this._onDidUpdateComments.fire();
@@ -343,6 +358,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         const changed = pr?.pullRequestId !== this._activePr?.pullRequestId;
         this._activePr = pr;
         if (changed) {
+            this._activePrGeneration++;
             this._fileTree = undefined;
             this._commits = undefined;
             this._allThreads = undefined;
@@ -462,15 +478,18 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         }
 
         const prId = this._activePr!.pullRequestId!;
+        const generation = this._activePrGeneration;
 
         try {
             // Fetch iterations to find the latest one
             const iterations = await this.prService.getPrIterations(prId);
+            if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
             this._iterations = iterations;
             const latestIteration = iterations[iterations.length - 1];
 
             if (latestIteration?.id) {
                 const iterationChanges = await this.prService.getPrIterationChanges(prId, latestIteration.id);
+                if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
                 const changes = (iterationChanges.changeEntries ?? []) as GitPullRequestChange[];
                 this._fileTree = buildFileTree(changes);
                 this._changeTypeMap.clear();
@@ -494,15 +513,19 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 this._fileTree = [];
             }
 
-            this._commits = await this.prService.getPrCommits(prId);
+            const commits = await this.prService.getPrCommits(prId);
+            if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
+            this._commits = commits;
             this.log.appendLine(`[active-pr] Loaded ${this._commits.length} commit(s)`);
 
             // Always fetch threads (cached until refresh)
-            await this.loadThreads(prId);
+            await this.loadThreads(prId, generation);
+            if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
             this.rebuildCommentsFromCache();
             this.applyCheckboxStates();
             this._onDidUpdateComments.fire();
         } catch (err) {
+            if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
             const msg = err instanceof Error ? err.message : String(err);
             this.log.appendLine(`[active-pr] Error loading data: ${msg}`);
             if (isAuthError(err)) {
@@ -513,14 +536,15 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._allThreads = this._allThreads ?? [];
         }
 
-        return [this.countFiles(this._fileTree), this._commits.length];
+        return this.getDataCounts();
     }
 
     /** Fetch all threads once and cache them. */
-    private async loadThreads(prId: number): Promise<void> {
+    private async loadThreads(prId: number, generation = this._activePrGeneration): Promise<void> {
         if (this._allThreads) { return; }
 
         const threads = await this.prService.getPrThreads(prId);
+        if (!this.isCurrentPr(prId, generation)) { return; }
         this.log.appendLine(`[active-pr] Loaded ${threads.length} comment thread(s)`);
 
         // Keep only non-deleted threads with at least one user comment
@@ -531,6 +555,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             );
         });
         this.log.appendLine(`[active-pr] ${this._allThreads.length} user thread(s) after filtering system/deleted`);
+    }
+
+    private isCurrentPr(prId: number, generation: number): boolean {
+        return generation === this._activePrGeneration && this._activePr?.pullRequestId === prId;
+    }
+
+    private getDataCounts(): [number, number] {
+        return [this._fileTree ? this.countFiles(this._fileTree) : 0, this._commits?.length ?? 0];
     }
 
     /** Apply the current filter to cached threads and attach to the file tree. */
@@ -674,6 +706,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     dispose(): void {
+        this._detectionGeneration++;
+        this._activePrGeneration++;
         this._onDidChangeTreeData.dispose();
         this._onDidUpdateComments.dispose();
         for (const d of this._disposables) {

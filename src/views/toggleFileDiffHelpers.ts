@@ -9,7 +9,10 @@ import { GIT_CONTENT_SCHEME, buildGitRefUri } from './gitRefContentProvider';
 export function computeRelativePath(fileUri: vscode.Uri, repoRootUri: vscode.Uri): string | undefined {
     const rootPath = repoRootUri.path;
     const filePath = fileUri.path;
-    if (filePath.startsWith(rootPath + '/')) {
+    const isWindowsPath = /^\/[a-z]:\//i.test(rootPath);
+    const comparableRoot = isWindowsPath ? rootPath.toLowerCase() : rootPath;
+    const comparableFile = isWindowsPath ? filePath.toLowerCase() : filePath;
+    if (comparableFile.startsWith(comparableRoot + '/')) {
         return filePath.substring(rootPath.length + 1);
     }
     return undefined;

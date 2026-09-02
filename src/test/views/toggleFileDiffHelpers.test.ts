@@ -58,6 +58,12 @@ suite('computeRelativePath', () => {
         assert.strictEqual(result, 'src/app.ts');
     });
 
+    test('handles Windows paths case-insensitively', () => {
+        const repoRoot = vscode.Uri.file('C:\\Users\\Dev\\Project');
+        const fileUri = vscode.Uri.file('c:\\users\\dev\\project\\src\\app.ts');
+        assert.strictEqual(computeRelativePath(fileUri, repoRoot), 'src/app.ts');
+    });
+
     test('handles Windows paths with different drive letters', () => {
         const repoRoot = vscode.Uri.file('C:\\Users\\dev\\project');
         const fileUri = vscode.Uri.file('D:\\Other\\file.ts');
