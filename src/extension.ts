@@ -20,6 +20,7 @@ import { registerPrTools } from './chat/prTools';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
 import { reviewedFilesStateKey } from './views/reviewState';
+import { chooseCheckoutMode } from './views/checkoutMode';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 const REVIEW_WORKTREE_OPEN_KEY = 'reviewWorktreeOpenPath';
@@ -1801,8 +1802,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
+			const checkoutMode = await chooseCheckoutMode((item as any)?.mode);
+			if (!checkoutMode) {
+				outputChannel.appendLine(`[checkout] Cancelled checkout selection for PR #${pr.pullRequestId ?? '?'}.`);
+				return;
+			}
+			outputChannel.appendLine(`[checkout] Selected ${checkoutMode} checkout for PR #${pr.pullRequestId ?? '?'}.`);
+
 			const configuration = vscode.workspace.getConfiguration('vscode-pr-azdo');
-			const checkoutMode = configuration.get<'branch' | 'worktree'>('checkoutMode', 'branch');
 			if (checkoutMode === 'worktree') {
 				const remoteInfo = detector.currentRemoteInfo;
 				if (!remoteInfo) {

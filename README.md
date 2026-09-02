@@ -9,7 +9,7 @@ Review Azure DevOps pull requests directly inside VS Code. Browse PR files, view
 - **All Open PRs** — browse all active pull requests in the repository
 - **Created By Me** — filter to PRs you authored
 - **Waiting for My Review** — see PRs assigned to you for review, grouped by your vote status (No vote yet, Approved, Waiting for author, etc.)
-- **Checkout** — one-click checkout of a PR, or double-click a PR in the tree; use the current branch checkout or opt into a reusable detached review worktree
+- **Checkout** — click the checkout action or double-click a PR, then choose the current repository or the reusable detached review worktree for that checkout
 - **Author display** — PR author's first name shown alongside the PR number
 - **Delete Branch** — remove the local branch after review from the Active PR sidebar
 
@@ -88,7 +88,7 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 - Works correctly with git worktrees — checkout, comments, diffs, and AI review all target the correct worktree directory
 - Automatically detects which repository contains the Azure DevOps remote, rather than assuming `repositories[0]`
 - In multi-root workspaces with both a main checkout and worktrees, operations target the matched repository
-- Set `vscode-pr-azdo.checkoutMode` to `worktree` to fetch the PR source commit into one reusable detached review worktree
+- Every checkout prompts for either the current repository or one reusable detached review worktree, so you can choose differently for each PR
 - The default review path is `../${repo}.worktrees/review`, resolved from the primary repository root; customize it with `vscode-pr-azdo.reviewWorktreePath`
 - Switching PRs reuses a clean review worktree without checking out the PR branch; a dirty review worktree is never replaced automatically
 - The review worktree opens in a separate VS Code window, and reviewed-file checkboxes remain scoped to each PR
@@ -117,7 +117,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Toggle Review Mode`                       | Show/hide comments and gutter icons                  |
 | `Filter Comments`                          | Switch between Active and All comment threads        |
 | `Refresh`                                  | Re-fetch PR list or active PR data                   |
-| `Checkout Pull Request`                    | Checkout a PR using the configured checkout mode     |
+| `Checkout Pull Request`                    | Choose where to check out a pull request              |
 | `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
 | `Review with Copilot`                      | Start an AI code review of the active PR             |
 | `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |

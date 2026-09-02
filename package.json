@@ -553,19 +553,6 @@
           "default": false,
           "markdownDescription": "Skip the dirty working tree warning when checking out a PR branch. Behaves as if you always chose **Try Anyway**."
         },
-        "vscode-pr-azdo.checkoutMode": {
-          "type": "string",
-          "enum": [
-            "branch",
-            "worktree"
-          ],
-          "enumDescriptions": [
-            "Check out the PR source branch in the current repository.",
-            "Check out the PR source commit in one reusable detached review worktree."
-          ],
-          "default": "branch",
-          "markdownDescription": "Choose whether PR checkout uses the current repository or a separate review worktree."
-        },
         "vscode-pr-azdo.reviewWorktreePath": {
           "type": "string",
           "default": "../${repo}.worktrees/review",

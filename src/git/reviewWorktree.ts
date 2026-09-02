@@ -48,8 +48,8 @@ export function parseWorktreePaths(porcelainOutput: string): string[] {
     return porcelainOutput
         .split(/\r?\n/)
         .filter(line => line.startsWith('worktree '))
-    .map(line => line.substring('worktree '.length).trim())
-    .filter(Boolean);
+        .map(line => line.substring('worktree '.length).trim())
+        .filter(Boolean);
 }
 
 /** Resolve the primary worktree even when called from a linked worktree. */
