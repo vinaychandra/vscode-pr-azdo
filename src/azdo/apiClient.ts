@@ -246,15 +246,23 @@ export class AzDoApiClient implements vscode.Disposable {
             }
 
             this.log.appendLine('[api] Silent recovery succeeded — retrying API operation.');
-            return operation();
+            try {
+                return await operation();
+            } catch (retryErr) {
+                const category = isAuthError(retryErr) ? 'authorization' : 'non-auth';
+                this.log.appendLine(`[api] Retried API operation failed (${category} error).`);
+                throw retryErr;
+            }
         }
     }
 
     private async recoverSilently(failedConnection: azdev.WebApi | undefined): Promise<boolean> {
         if (this._connection && this._connection !== failedConnection) {
+            this.log.appendLine('[api] Reusing connection refreshed by another request.');
             return true;
         }
         if (this._authRecoveryPromise) {
+            this.log.appendLine('[api] Waiting for in-flight silent recovery.');
             return this._authRecoveryPromise;
         }
 

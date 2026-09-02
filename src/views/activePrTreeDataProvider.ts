@@ -281,18 +281,24 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._lastDetectedCommit = commitId;
 
         if (!branchName && !commitId) {
+            this.log.appendLine('[active-pr] Skipping PR detection (no current branch or commit).');
             this.setActivePr(undefined);
             return;
         }
 
         try {
+            let matchedBy = branchName ? 'branch' : 'commit';
             let pr = branchName ? await this.prService.findPrForBranch(branchName) : undefined;
             if (!pr && commitId) {
+                if (branchName) {
+                    this.log.appendLine(`[active-pr] No branch match; trying commit ${commitId.substring(0, 7)}.`);
+                }
+                matchedBy = 'commit';
                 pr = await this.prService.findPrForCommit(commitId);
             }
             this.log.appendLine(
                 pr
-                    ? `[active-pr] Found PR #${pr.pullRequestId}: ${pr.title}`
+                    ? `[active-pr] Found PR #${pr.pullRequestId}: ${pr.title} (matched by ${matchedBy})`
                     : `[active-pr] No active PR for current branch or commit`,
             );
             this.setActivePr(pr);

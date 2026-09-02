@@ -639,17 +639,26 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.toggleFileDiff', async () => {
 			const pr = activePrProvider?._activePrForContext;
-			if (!pr) { return; }
+			if (!pr) {
+				outputChannel.appendLine('[toggle] Cannot toggle: no active pull request.');
+				return;
+			}
 
 			const editor = vscode.window.activeTextEditor;
-			if (!editor) { return; }
+			if (!editor) {
+				outputChannel.appendLine('[toggle] Cannot toggle: no active editor.');
+				return;
+			}
 
 			const uri = editor.document.uri;
 			const cursorLine = editor.selection.active.line;
 			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
 			const targetRef = `origin/${targetBranch}`;
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
-			if (!repoRoot) { return; }
+			if (!repoRoot) {
+				outputChannel.appendLine('[toggle] Cannot toggle: repository root not found.');
+				return;
+			}
 
 			const activeTabInput = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
 			const diffFileUri = getWorkspaceFileUriFromDiffInput(activeTabInput);
@@ -659,12 +668,16 @@ export async function activate(context: vscode.ExtensionContext) {
 				// Diff → File: activeTextEditor may be the file-backed modified side,
 				// so the URI scheme alone cannot identify the current editor as a diff.
 				if (!diffFileUri) {
+					outputChannel.appendLine('[toggle] Cannot open workspace file: diff has no file-backed side.');
 					vscode.window.showInformationMessage('This file was deleted in the pull request — there is no working-copy version to open.');
 					return;
 				}
 
 				const relative = computeRelativePath(diffFileUri, repoRoot);
-				if (!relative) { return; }
+				if (!relative) {
+					outputChannel.appendLine(`[toggle] Cannot resolve diff file under repository root: ${diffFileUri.path}`);
+					return;
+				}
 
 				outputChannel.appendLine(`[toggle] Diff → File for ${relative}`);
 				await vscode.commands.executeCommand(
@@ -674,20 +687,28 @@ export async function activate(context: vscode.ExtensionContext) {
 					{ viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
 				);
 				const e = vscode.window.activeTextEditor;
-				if (!e || e.document.uri.toString() !== diffFileUri.toString()) { return; }
+				if (!e || e.document.uri.toString() !== diffFileUri.toString()) {
+					outputChannel.appendLine(`[toggle] Workspace file did not become active for ${relative}.`);
+					return;
+				}
 				const pos = new vscode.Position(Math.min(cursorLine, Math.max(0, e.document.lineCount - 1)), 0);
 				e.selection = new vscode.Selection(pos, pos);
 				e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+				outputChannel.appendLine(`[toggle] Opened workspace file for ${relative}.`);
 			} else if (uri.scheme === 'file') {
 				// File → Diff: compute relative path, look up change type, open diff
 				const relative = computeRelativePath(uri, repoRoot);
-				if (!relative) { return; }
+				if (!relative) {
+					outputChannel.appendLine(`[toggle] Cannot resolve active file under repository root: ${uri.path}`);
+					return;
+				}
 
 				const changeType = activePrProvider?.getChangeType(relative) ?? VersionControlChangeType.Edit;
 				const diff = buildDiffParams(relative, changeType, repoRoot, targetRef, targetBranch);
 
 				outputChannel.appendLine(`[toggle] File → Diff for ${relative}`);
 				await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
+				outputChannel.appendLine(`[toggle] Opened diff for ${relative}.`);
 
 				// Scroll to same line
 				setTimeout(() => {
@@ -700,11 +721,15 @@ export async function activate(context: vscode.ExtensionContext) {
 			} else if (uri.scheme === GIT_CONTENT_SCHEME) {
 				// Diff → File: extract file path, open workspace file
 				const path = extractPathFromGitRefUri(uri);
-				if (!path) { return; }
+				if (!path) {
+					outputChannel.appendLine('[toggle] Cannot resolve file path from git-content URI.');
+					return;
+				}
 
 				// For deleted files there is no working-copy file to toggle to
 				const ctForToggle = activePrProvider?.getChangeType(path);
 				if (ctForToggle !== undefined && (ctForToggle & VersionControlChangeType.Delete)) {
+					outputChannel.appendLine(`[toggle] Cannot open deleted workspace file: ${path}`);
 					vscode.window.showInformationMessage('This file was deleted in the pull request — there is no working-copy version to open.');
 					return;
 				}
@@ -716,6 +741,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				const pos = new vscode.Position(cursorLine, 0);
 				e.selection = new vscode.Selection(pos, pos);
 				e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+				outputChannel.appendLine(`[toggle] Opened workspace file for ${path}.`);
+			} else {
+				outputChannel.appendLine(`[toggle] Cannot toggle unsupported URI scheme: ${uri.scheme}`);
 			}
 		}),
 	);
