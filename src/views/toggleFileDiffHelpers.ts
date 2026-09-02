@@ -24,6 +24,17 @@ export function extractPathFromGitRefUri(uri: vscode.Uri): string | undefined {
     return p === '__empty__' ? undefined : p;
 }
 
+/** Return the workspace file shown by a text diff, regardless of which side is focused. */
+export function getWorkspaceFileUriFromDiffInput(input: unknown): vscode.Uri | undefined {
+    if (!(input instanceof vscode.TabInputTextDiff)) {
+        return undefined;
+    }
+    if (input.modified.scheme === 'file') {
+        return input.modified;
+    }
+    return input.original.scheme === 'file' ? input.original : undefined;
+}
+
 /**
  * Check if a URI (file or git-ref scheme) belongs to a set of changed file paths.
  */

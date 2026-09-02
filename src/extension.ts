@@ -11,7 +11,7 @@ import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type A
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME, type PersistedDrafts } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
-import { computeRelativePath, extractPathFromGitRefUri, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
+import { computeRelativePath, extractPathFromGitRefUri, getWorkspaceFileUriFromDiffInput, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
@@ -651,7 +651,34 @@ export async function activate(context: vscode.ExtensionContext) {
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
 			if (!repoRoot) { return; }
 
-			if (uri.scheme === 'file') {
+			const activeTabInput = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+			const diffFileUri = getWorkspaceFileUriFromDiffInput(activeTabInput);
+			const isDiffTab = activeTabInput instanceof vscode.TabInputTextDiff;
+
+			if (isDiffTab) {
+				// Diff → File: activeTextEditor may be the file-backed modified side,
+				// so the URI scheme alone cannot identify the current editor as a diff.
+				if (!diffFileUri) {
+					vscode.window.showInformationMessage('This file was deleted in the pull request — there is no working-copy version to open.');
+					return;
+				}
+
+				const relative = computeRelativePath(diffFileUri, repoRoot);
+				if (!relative) { return; }
+
+				outputChannel.appendLine(`[toggle] Diff → File for ${relative}`);
+				await vscode.commands.executeCommand(
+					'vscode.openWith',
+					diffFileUri,
+					'default',
+					{ viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+				);
+				const e = vscode.window.activeTextEditor;
+				if (!e || e.document.uri.toString() !== diffFileUri.toString()) { return; }
+				const pos = new vscode.Position(Math.min(cursorLine, Math.max(0, e.document.lineCount - 1)), 0);
+				e.selection = new vscode.Selection(pos, pos);
+				e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+			} else if (uri.scheme === 'file') {
 				// File → Diff: compute relative path, look up change type, open diff
 				const relative = computeRelativePath(uri, repoRoot);
 				if (!relative) { return; }

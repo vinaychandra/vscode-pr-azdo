@@ -5,6 +5,7 @@ import { GIT_CONTENT_SCHEME, buildGitRefUri } from '../../views/gitRefContentPro
 import {
     computeRelativePath,
     extractPathFromGitRefUri,
+    getWorkspaceFileUriFromDiffInput,
     isUriInChangedFiles,
     buildDiffParams,
 } from '../../views/toggleFileDiffHelpers';
@@ -108,6 +109,33 @@ suite('extractPathFromGitRefUri', () => {
     test('handles root-level file', () => {
         const uri = buildGitRefUri('README.md', 'HEAD');
         assert.strictEqual(extractPathFromGitRefUri(uri), 'README.md');
+    });
+});
+
+suite('getWorkspaceFileUriFromDiffInput', () => {
+    test('returns the modified file URI when the active tab is a diff', () => {
+        const fileUri = vscode.Uri.file('/home/user/repo/src/index.ts');
+        const input = new vscode.TabInputTextDiff(
+            buildGitRefUri('src/index.ts', 'origin/main'),
+            fileUri,
+        );
+
+        assert.strictEqual(getWorkspaceFileUriFromDiffInput(input), fileUri);
+    });
+
+    test('returns undefined for a regular file tab input', () => {
+        const input = new vscode.TabInputText(vscode.Uri.file('/home/user/repo/src/index.ts'));
+
+        assert.strictEqual(getWorkspaceFileUriFromDiffInput(input), undefined);
+    });
+
+    test('returns undefined when neither diff side is a workspace file', () => {
+        const input = new vscode.TabInputTextDiff(
+            buildGitRefUri('src/deleted.ts', 'origin/main'),
+            buildGitRefUri('__empty__', 'origin/main'),
+        );
+
+        assert.strictEqual(getWorkspaceFileUriFromDiffInput(input), undefined);
     });
 });
 
