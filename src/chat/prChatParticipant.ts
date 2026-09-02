@@ -171,6 +171,11 @@ function getPrompt(configKey: string, defaultValue: string): string {
     return custom.trim() || defaultValue;
 }
 
+/** Append top-level user text so Copilot Auto can route a tool-result continuation. */
+export function appendAutoRoutingPrompt(messages: vscode.LanguageModelChatMessage[], prompt: string): void {
+    messages.push(vscode.LanguageModelChatMessage.User(prompt));
+}
+
 /**
  * Register the @azdo-pr chat participant.
  */
@@ -382,6 +387,9 @@ export function registerPrChatParticipant(
                         ]));
                     }
                 }
+
+                appendAutoRoutingPrompt(messages, 'Continue resolving the pull request comment using the tool results above.');
+                log.appendLine(`[chat] Continuing after ${pendingToolCalls.length} tool call(s) with Auto routing context.`);
 
                 currentResponse = await request.model.sendRequest(messages, {
                     justification: 'Continuing after tool use',
@@ -597,6 +605,9 @@ async function handleReviewBranch(
                 }
             }
 
+            appendAutoRoutingPrompt(messages, 'Continue reviewing the branch changes using the tool results above.');
+            log.appendLine(`[chat/review-branch] Continuing after ${pendingCalls.length} tool call(s) with Auto routing context.`);
+
             currentResponse = await request.model.sendRequest(messages, {
                 justification: 'Continuing review after tool use',
                 tools,
@@ -781,6 +792,9 @@ async function handleReview(
                     ]));
                 }
             }
+
+            appendAutoRoutingPrompt(messages, 'Continue reviewing the pull request changes using the tool results above.');
+            log.appendLine(`[chat/review] Continuing after ${pendingCalls.length} tool call(s) with Auto routing context.`);
 
             currentResponse = await request.model.sendRequest(messages, {
                 justification: 'Continuing review after tool use',
