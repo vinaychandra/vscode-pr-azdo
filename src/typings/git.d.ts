@@ -45,6 +45,7 @@ export interface RepositoryState {
 
 export interface Branch {
     readonly name: string | undefined;
+    readonly commit?: string;
     readonly upstream?: { name: string; remote: string };
 }
 

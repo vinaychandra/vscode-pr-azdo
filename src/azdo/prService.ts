@@ -66,6 +66,39 @@ export class PullRequestService {
         return prs[0];
     }
 
+    /** Find an active PR that contains the given commit. */
+    async findPrForCommit(commitId: string): Promise<GitPullRequest | undefined> {
+        const git = await this.apiClient.getGitApi();
+        const prs = await git.getPullRequests(
+            this.remoteInfo.repositoryName,
+            { status: PullRequestStatus.Active },
+            this.remoteInfo.project,
+        );
+        const normalizedCommitId = commitId.toLowerCase();
+
+        const sourceTipMatch = prs.find(pr =>
+            pr.lastMergeSourceCommit?.commitId?.toLowerCase() === normalizedCommitId,
+        );
+        if (sourceTipMatch) {
+            return sourceTipMatch;
+        }
+
+        for (const pr of prs) {
+            if (pr.pullRequestId === undefined) {
+                continue;
+            }
+            const commits = pr.commits ?? await git.getPullRequestCommits(
+                this.remoteInfo.repositoryName,
+                pr.pullRequestId,
+                this.remoteInfo.project,
+            );
+            if (commits.some(commit => commit.commitId?.toLowerCase() === normalizedCommitId)) {
+                return pr;
+            }
+        }
+        return undefined;
+    }
+
     /** Get all iterations for a pull request. */
     async getPrIterations(pullRequestId: number): Promise<GitPullRequestIteration[]> {
         const git = await this.apiClient.getGitApi();

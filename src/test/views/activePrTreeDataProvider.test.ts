@@ -25,6 +25,7 @@ function createMockLog(): vscode.OutputChannel {
 function createMockPrService(overrides: Partial<PullRequestService> = {}): PullRequestService {
     return {
         findPrForBranch: async () => undefined,
+        findPrForCommit: async () => undefined,
         getPrIterations: async () => [],
         getPrIterationChanges: async () => ({ changeEntries: [] }),
         getPrCommits: async () => [],
@@ -34,9 +35,9 @@ function createMockPrService(overrides: Partial<PullRequestService> = {}): PullR
     } as unknown as PullRequestService;
 }
 
-function createMockGitApi(branchName?: string): API {
+function createMockGitApi(branchName?: string, commitId?: string): API {
     const state: RepositoryState = {
-        HEAD: branchName ? { name: branchName } : undefined,
+        HEAD: branchName || commitId ? { name: branchName, commit: commitId } : undefined,
         onDidChange: new vscode.EventEmitter<void>().event,
     } as any;
     const repo: Repository = {
@@ -222,6 +223,79 @@ suite('ActivePrTreeDataProvider — detectActivePr when not connected', () => {
         );
         await provider.detectActivePr();
         assert.ok(!findPrCalled, 'findPrForBranch should not be called when disconnected');
+        provider.dispose();
+    });
+});
+
+suite('ActivePrTreeDataProvider — commit detection', () => {
+    const testPr = {
+        pullRequestId: 42,
+        title: 'Commit PR',
+        sourceRefName: 'refs/heads/feature',
+        targetRefName: 'refs/heads/main',
+    } as GitPullRequest;
+
+    test('falls back to the current commit when no branch PR is found', async () => {
+        let receivedCommit: string | undefined;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => undefined,
+                findPrForCommit: async commitId => {
+                    receivedCommit = commitId;
+                    return testPr;
+                },
+            }),
+            createMockGitApi('feature', 'abc123'),
+            createMockLog(),
+        );
+
+        await provider.detectActivePr();
+
+        assert.strictEqual(receivedCommit, 'abc123');
+        const roots = await provider.getChildren();
+        assert.ok(roots.some(root => root instanceof ActivePrRootItem));
+        provider.dispose();
+    });
+
+    test('detects an active PR from a detached HEAD commit', async () => {
+        let branchLookupCalled = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => {
+                    branchLookupCalled = true;
+                    return undefined;
+                },
+                findPrForCommit: async commitId => commitId === 'abc123' ? testPr : undefined,
+            }),
+            createMockGitApi(undefined, 'abc123'),
+            createMockLog(),
+        );
+
+        await provider.detectActivePr();
+
+        assert.strictEqual(branchLookupCalled, false);
+        const roots = await provider.getChildren();
+        assert.ok(roots.some(root => root instanceof ActivePrRootItem));
+        provider.dispose();
+    });
+
+    test('does not query by commit when branch lookup succeeds', async () => {
+        let commitLookupCalled = false;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => testPr,
+                findPrForCommit: async () => {
+                    commitLookupCalled = true;
+                    return undefined;
+                },
+            }),
+            createMockGitApi('feature', 'abc123'),
+            createMockLog(),
+        );
+
+        await provider.detectActivePr();
+
+        assert.strictEqual(commitLookupCalled, false);
         provider.dispose();
     });
 });
@@ -1026,19 +1100,22 @@ suite('ActivePrTreeDataProvider — delete entry shape', () => {
     });
 });
 
-// --- Branch-change gating ---
+// --- Ref-change gating ---
 // VS Code's git extension fires repo.state.onDidChange every ~10–15s (polling)
-// and on any working-tree / index change. We must NOT re-run findPrForBranch
-// on every such event — only when the branch name actually changed.
+// and on any working-tree / index change. We must only re-run detection when
+// the branch name or commit actually changed.
 suite('ActivePrTreeDataProvider — branch-change gating', () => {
     /**
      * Build a repo+gitApi pair with a mutable HEAD and a manually fireable
      * onDidChange event, so tests can simulate the VS Code git extension
      * notifying about repo state changes.
      */
-    function makeMutableGitApi(initialBranch?: string) {
+    function makeMutableGitApi(initialBranch?: string, initialCommit?: string) {
         const stateEmitter = new vscode.EventEmitter<void>();
-        const head: { name: string | undefined } = { name: initialBranch };
+        const head: { name: string | undefined; commit: string | undefined } = {
+            name: initialBranch,
+            commit: initialCommit,
+        };
         const state = {
             HEAD: head,
             onDidChange: stateEmitter.event,
@@ -1051,6 +1128,7 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         return {
             api,
             setBranch(name: string | undefined) { head.name = name; },
+            setCommit(commit: string | undefined) { head.commit = commit; },
             fireStateChange() { stateEmitter.fire(); },
             dispose() { stateEmitter.dispose(); },
         };
@@ -1115,6 +1193,33 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         await new Promise(r => setTimeout(r, 0));
         assert.strictEqual(findCalls, callsAfterInit + 1, 'findPrForBranch should not be called again on a no-op state change');
 
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('re-detects when the commit changes on the same branch', async () => {
+        let commitLookups = 0;
+        const harness = makeMutableGitApi('feature/abc', 'commit-1');
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({
+                findPrForBranch: async () => undefined,
+                findPrForCommit: async () => {
+                    commitLookups++;
+                    return undefined;
+                },
+            }),
+            harness.api,
+            createMockLog(),
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const callsAfterInit = commitLookups;
+
+        harness.setCommit('commit-2');
+        harness.fireStateChange();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        assert.strictEqual(commitLookups, callsAfterInit + 1);
         provider.dispose();
         harness.dispose();
     });

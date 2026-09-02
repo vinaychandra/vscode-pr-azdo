@@ -39,6 +39,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _activePr: GitPullRequest | undefined;
     /** Branch name observed at the last detectActivePr run; used to skip work on identical state changes. */
     private _lastDetectedBranch: string | undefined;
+    private _lastDetectedCommit: string | undefined;
     private _fileTree: (FolderItem | FileChangeItem)[] | undefined;
     private _commits: GitCommitRef[] | undefined;
     /** All user-visible threads (cached from API, never cleared by filter change). */
@@ -251,10 +252,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             repo.state.onDidChange(() => {
                 // VS Code's git extension fires onDidChange on every poll (~10–15s)
                 // and on any working-tree/index change. Most of those are not
-                // branch changes, so skip the AzDO API call unless the current
-                // branch differs from the last detected one.
-                const current = this.getCurrentBranchName();
-                if (current === this._lastDetectedBranch) {
+                // ref changes, so skip the AzDO API call unless the current
+                // branch or commit differs from the last detected one.
+                const current = this.getCurrentHead();
+                if (current.branchName === this._lastDetectedBranch
+                    && current.commitId === this._lastDetectedCommit) {
                     return;
                 }
                 void this.detectActivePr();
@@ -268,25 +270,30 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         if (!this.prService.isConnected) {
             this.log.appendLine('[active-pr] Skipping PR detection (not authenticated).');
             this._lastDetectedBranch = undefined;
+            this._lastDetectedCommit = undefined;
             this.setActivePr(undefined);
             return;
         }
 
-        const branchName = this.getCurrentBranchName();
-        this.log.appendLine(`[active-pr] Current branch: ${branchName ?? '(detached/unknown)'}`);
+        const { branchName, commitId } = this.getCurrentHead();
+        this.log.appendLine(`[active-pr] Current ref: ${branchName ?? '(detached)'}, commit ${commitId ?? '(unknown)'}`);
         this._lastDetectedBranch = branchName;
+        this._lastDetectedCommit = commitId;
 
-        if (!branchName) {
+        if (!branchName && !commitId) {
             this.setActivePr(undefined);
             return;
         }
 
         try {
-            const pr = await this.prService.findPrForBranch(branchName);
+            let pr = branchName ? await this.prService.findPrForBranch(branchName) : undefined;
+            if (!pr && commitId) {
+                pr = await this.prService.findPrForCommit(commitId);
+            }
             this.log.appendLine(
                 pr
                     ? `[active-pr] Found PR #${pr.pullRequestId}: ${pr.title}`
-                    : `[active-pr] No active PR for branch "${branchName}"`,
+                    : `[active-pr] No active PR for current branch or commit`,
             );
             this.setActivePr(pr);
         } catch (err) {
@@ -307,6 +314,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._changeTypeMap.clear();
         this._activePr = undefined;
         this._lastDetectedBranch = undefined;
+        this._lastDetectedCommit = undefined;
         void this.detectActivePr();
     }
 
@@ -347,14 +355,14 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         }
     }
 
-    private getCurrentBranchName(): string | undefined {
+    private getCurrentHead(): { branchName: string | undefined; commitId: string | undefined } {
         for (const repo of this.gitApi.repositories) {
             const head = repo.state.HEAD;
-            if (head?.name) {
-                return head.name;
+            if (head?.name || head?.commit) {
+                return { branchName: head.name, commitId: head.commit };
             }
         }
-        return undefined;
+        return { branchName: undefined, commitId: undefined };
     }
 
     getTreeItem(element: ActivePrTreeItem): vscode.TreeItem {
