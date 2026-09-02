@@ -8,6 +8,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Reusable review worktree checkout** — optionally check out PR source commits into one detached review worktree instead of switching branches in the current repository. The default sibling path is `<repo>.worktrees/review`, it can be customized in settings, and clean worktrees are reused when switching reviews. Dirty review worktrees are left untouched.
 - **Deleted files in the Active PR view** — files removed in the pull request now appear in the Files tree alongside additions and edits, with a red `diff-removed` icon and a "Delete" label. Added files use a green `diff-added` icon; renames use `diff-renamed`. Clicking a deleted file opens the original content from the target branch in a read-only editor.
 - **Comments on deleted files** — existing Azure DevOps comments on deleted files now render inline at their original lines, and you can create new comments via the gutter `+` just like on edited files. Drafts and replies on deleted files are anchored to the correct side of the PR (`leftFileStart`) when posted to Azure DevOps.
 

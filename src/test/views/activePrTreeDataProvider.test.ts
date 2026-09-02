@@ -6,6 +6,7 @@ import { CommentThreadStatus, CommentType, VersionControlChangeType } from 'azur
 import type { GitPullRequestCommentThread, GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../../azdo/prService';
 import type { API, Repository, RepositoryState } from '../../typings/git';
+import { reviewedFilesStateKey } from '../../views/reviewState';
 
 // --- Helpers ---
 
@@ -138,6 +139,30 @@ suite('ActivePrTreeDataProvider — Review Mode', () => {
         // Can't directly set _allThreads, but filteredThreads should return []
         // since reviewMode is off
         assert.deepStrictEqual(provider.filteredThreads, []);
+        provider.dispose();
+    });
+});
+
+suite('ActivePrTreeDataProvider — reviewed-file state', () => {
+    test('uses a distinct persistence key for each pull request', () => {
+        assert.notStrictEqual(reviewedFilesStateKey(41), reviewedFilesStateKey(42));
+    });
+
+    test('clears reviewed files when the active pull request changes', async () => {
+        let currentPr = { pullRequestId: 41, title: 'First PR' } as GitPullRequest;
+        const provider = new ActivePrTreeDataProvider(
+            createMockPrService({ findPrForBranch: async () => currentPr }),
+            createMockGitApi('feature'),
+            createMockLog(),
+        );
+        await provider.detectActivePr();
+        provider.markFileReviewed('src/first.ts', true);
+        assert.strictEqual(provider.reviewedFiles.has('src/first.ts'), true);
+
+        currentPr = { pullRequestId: 42, title: 'Second PR' } as GitPullRequest;
+        await provider.detectActivePr();
+
+        assert.strictEqual(provider.reviewedFiles.size, 0);
         provider.dispose();
     });
 });

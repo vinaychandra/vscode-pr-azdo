@@ -18,8 +18,11 @@ import { PrContextProvider } from './chat/prContextProvider';
 import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
+import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
+import { reviewedFilesStateKey } from './views/reviewState';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
+const REVIEW_WORKTREE_OPEN_KEY = 'reviewWorktreeOpenPath';
 
 export async function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
@@ -124,7 +127,17 @@ export async function activate(context: vscode.ExtensionContext) {
 	registerPrTools(context, prContextProvider, outputChannel, gitApi, detector);
 
 	// --- Review Mode ---
-	let reviewMode = context.workspaceState.get<boolean>('reviewMode', false);
+	const requestedReviewWorktreePath = context.globalState.get<string>(REVIEW_WORKTREE_OPEN_KEY);
+	const currentRepositoryPath = getActiveRepository(gitApi, detector)?.rootUri.fsPath;
+	const openedForWorktreeReview = !!requestedReviewWorktreePath
+		&& !!currentRepositoryPath
+		&& areSamePaths(requestedReviewWorktreePath, currentRepositoryPath);
+	let reviewMode = context.workspaceState.get<boolean>('reviewMode', openedForWorktreeReview);
+	if (openedForWorktreeReview) {
+		await context.globalState.update(REVIEW_WORKTREE_OPEN_KEY, undefined);
+		await context.workspaceState.update('reviewMode', true);
+		outputChannel.appendLine(`[worktree] Opened review workspace: ${currentRepositoryPath}`);
+	}
 
 	// --- Draft Persistence ---
 	const DRAFT_STATE_KEY = 'draftComments';
@@ -404,7 +417,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				// Restore persisted reviewed-files state for the newly active PR
 				const prId = activePrProvider?._activePrForContext?.pullRequestId;
 				if (prId && activePrProvider!.reviewedFiles.size === 0) {
-					const persisted = context.workspaceState.get<string[]>(`reviewedFiles-${prId}`);
+					const persisted = context.workspaceState.get<string[]>(reviewedFilesStateKey(prId));
 					if (persisted && persisted.length > 0) {
 						activePrProvider!.setReviewedFiles(persisted);
 						outputChannel.appendLine(`[reviewed] Restored ${persisted.length} reviewed file(s) for PR #${prId}`);
@@ -587,7 +600,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			const prId = activePrProvider._activePrForContext?.pullRequestId;
 			if (prId) {
 				const reviewed = [...activePrProvider.reviewedFiles];
-				void context.workspaceState.update(`reviewedFiles-${prId}`, reviewed);
+				void context.workspaceState.update(reviewedFilesStateKey(prId), reviewed);
 				outputChannel.appendLine(`[reviewed] Persisted ${reviewed.length} reviewed file(s) for PR #${prId}`);
 			}
 		}),
@@ -1785,6 +1798,63 @@ export async function activate(context: vscode.ExtensionContext) {
 			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				vscode.window.showWarningMessage('No git repository found.');
+				return;
+			}
+
+			const configuration = vscode.workspace.getConfiguration('vscode-pr-azdo');
+			const checkoutMode = configuration.get<'branch' | 'worktree'>('checkoutMode', 'branch');
+			if (checkoutMode === 'worktree') {
+				const remoteInfo = detector.currentRemoteInfo;
+				if (!remoteInfo) {
+					outputChannel.appendLine('[worktree] Checkout stopped: Azure DevOps remote information is unavailable.');
+					vscode.window.showWarningMessage('No Azure DevOps remote information available.');
+					return;
+				}
+
+				try {
+					await vscode.window.withProgress(
+						{ location: vscode.ProgressLocation.Notification, title: `Preparing review worktree for PR #${pr.pullRequestId ?? '?'}…` },
+						async progress => {
+							const primaryRoot = await getPrimaryWorktreeRoot(repo.rootUri.fsPath);
+							const configuredPath = configuration.get<string>('reviewWorktreePath', DEFAULT_REVIEW_WORKTREE_PATH);
+							const reviewPath = resolveReviewWorktreePath(primaryRoot, configuredPath);
+							outputChannel.appendLine(`[worktree] PR #${pr.pullRequestId ?? '?'} source=${pr.sourceRefName} path=${reviewPath}`);
+
+							progress.report({ message: 'Fetching pull request commit…' });
+							const commitId = await fetchPullRequestCommit(primaryRoot, remoteInfo.remoteName, pr.sourceRefName!);
+							outputChannel.appendLine(`[worktree] Fetched ${commitId.substring(0, 12)} for PR #${pr.pullRequestId ?? '?'}.`);
+
+							progress.report({ message: 'Updating detached review worktree…' });
+							const prepared = await prepareReviewWorktree(primaryRoot, reviewPath, commitId);
+							outputChannel.appendLine(`[worktree] ${prepared.reused ? 'Reused' : 'Created'} detached review worktree at ${prepared.path}.`);
+
+							if (areSamePaths(repo.rootUri.fsPath, prepared.path)) {
+								if (!reviewMode) {
+									reviewMode = true;
+									await context.workspaceState.update('reviewMode', true);
+									applyReviewMode();
+								}
+								activePrProvider?.refresh();
+								outputChannel.appendLine('[worktree] Review worktree updated in the current window.');
+								return;
+							}
+
+							await context.globalState.update(REVIEW_WORKTREE_OPEN_KEY, prepared.path);
+							outputChannel.appendLine('[worktree] Opening review worktree in a new VS Code window.');
+							await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(prepared.path), { forceNewWindow: true });
+						},
+					);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					outputChannel.appendLine(`[worktree] Checkout failed: ${msg}`);
+					if (err instanceof DirtyReviewWorktreeError) {
+						vscode.window.showWarningMessage(
+							`The review worktree has uncommitted changes. Commit, stash, or discard them before switching reviews: ${err.worktreePath}`,
+						);
+					} else {
+						vscode.window.showErrorMessage(`Failed to prepare review worktree: ${msg}`);
+					}
+				}
 				return;
 			}
 
