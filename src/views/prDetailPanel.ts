@@ -91,15 +91,17 @@ export class PrDetailPanel {
 
     private async castVote(vote: number): Promise<void> {
         try {
-            const gitApi = await this.apiClient.getGitApi();
-            const userId = await this.apiClient.getCurrentUserId();
-            await gitApi.createPullRequestReviewer(
-                { vote },
-                this.remoteInfo.repositoryName,
-                this.pr.pullRequestId!,
-                userId,
-                this.remoteInfo.project,
-            );
+            await this.apiClient.withAuthRecovery(async () => {
+                const gitApi = await this.apiClient.getGitApi();
+                const userId = await this.apiClient.getCurrentUserId();
+                await gitApi.createPullRequestReviewer(
+                    { vote },
+                    this.remoteInfo.repositoryName,
+                    this.pr.pullRequestId!,
+                    userId,
+                    this.remoteInfo.project,
+                );
+            });
             const label = vote === 10 ? 'approved' : vote === -10 ? 'rejected' : vote === -5 ? 'marked as waiting for author' : `voted (${vote})`;
             this.log.appendLine(`[pr-detail] PR #${this.pr.pullRequestId} ${label}`);
             vscode.window.showInformationMessage(`PR #${this.pr.pullRequestId} ${label}.`);

@@ -262,12 +262,105 @@ suite('AzDoApiClient — doConnect multi-tenant flow', () => {
     });
 });
 
+suite('AzDoApiClient — auth recovery', () => {
+    test('retries the operation once after silent recovery succeeds', async () => {
+        const client = new AzDoApiClient(createSpyAuthProvider(), createRemoteInfo(), createMockLog());
+        let operationCalls = 0;
+        let recoveryCalls = 0;
+        (client as any).tryConnectSilently = async () => {
+            recoveryCalls++;
+            return true;
+        };
+
+        const result = await client.withAuthRecovery(async () => {
+            operationCalls++;
+            if (operationCalls === 1) {
+                throw new Error('TF400813: User is not authorized');
+            }
+            return 'recovered';
+        });
+
+        assert.strictEqual(result, 'recovered');
+        assert.strictEqual(operationCalls, 2);
+        assert.strictEqual(recoveryCalls, 1);
+        client.dispose();
+    });
+
+    test('rethrows the original error when silent recovery is unavailable', async () => {
+        const client = new AzDoApiClient(createSpyAuthProvider(), createRemoteInfo(), createMockLog());
+        const originalError = new Error('User aaaaa is not authorized');
+        let operationCalls = 0;
+        (client as any).tryConnectSilently = async () => false;
+
+        await assert.rejects(
+            client.withAuthRecovery(async () => {
+                operationCalls++;
+                throw originalError;
+            }),
+            err => err === originalError,
+        );
+
+        assert.strictEqual(operationCalls, 1);
+        client.dispose();
+    });
+
+    test('does not retry non-auth errors', async () => {
+        const client = new AzDoApiClient(createSpyAuthProvider(), createRemoteInfo(), createMockLog());
+        let operationCalls = 0;
+        let recoveryCalls = 0;
+        (client as any).tryConnectSilently = async () => {
+            recoveryCalls++;
+            return true;
+        };
+
+        await assert.rejects(client.withAuthRecovery(async () => {
+            operationCalls++;
+            throw new Error('ECONNRESET');
+        }));
+
+        assert.strictEqual(operationCalls, 1);
+        assert.strictEqual(recoveryCalls, 0);
+        client.dispose();
+    });
+
+    test('shares one silent recovery across concurrent auth failures', async () => {
+        const client = new AzDoApiClient(createSpyAuthProvider(), createRemoteInfo(), createMockLog());
+        let recoveryCalls = 0;
+        let completeRecovery!: (connected: boolean) => void;
+        const recovery = new Promise<boolean>(resolve => { completeRecovery = resolve; });
+        (client as any).tryConnectSilently = () => {
+            recoveryCalls++;
+            return recovery;
+        };
+
+        const attempts = new Map<string, number>();
+        const run = (name: string) => client.withAuthRecovery(async () => {
+            const attempt = (attempts.get(name) ?? 0) + 1;
+            attempts.set(name, attempt);
+            if (attempt === 1) {
+                throw new Error('HTTP 401 Unauthorized');
+            }
+            return name;
+        });
+
+        const first = run('first');
+        const second = run('second');
+        await new Promise(resolve => setTimeout(resolve, 0));
+        completeRecovery(true);
+
+        assert.deepStrictEqual(await Promise.all([first, second]), ['first', 'second']);
+        assert.strictEqual(recoveryCalls, 1);
+        client.dispose();
+    });
+});
+
 suite('isAuthError', () => {
     test('detects 401', () => assert.ok(isAuthError(new Error('HTTP 401'))));
     test('detects 403', () => assert.ok(isAuthError(new Error('Status 403 Forbidden'))));
     test('detects unauthorized', () => assert.ok(isAuthError(new Error('Unauthorized'))));
     test('detects TF400813', () => assert.ok(isAuthError(new Error('TF400813: not authorized'))));
     test('detects "not authorized to access"', () => assert.ok(isAuthError(new Error('not authorized to access this resource'))));
+    test('detects plain "user is not authorized"', () => assert.ok(isAuthError(new Error('User aaaaa is not authorized'))));
     test('rejects network error', () => assert.ok(!isAuthError(new Error('ECONNREFUSED'))));
     test('rejects null', () => assert.ok(!isAuthError(null)));
     test('rejects undefined', () => assert.ok(!isAuthError(undefined)));

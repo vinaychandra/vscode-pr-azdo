@@ -1988,8 +1988,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			// Determine default target branch from the repo or fall back to main
 			let defaultTarget = 'main';
 			try {
-				const gitApiClient = await apiClient.getGitApi();
-				const repoInfo = await gitApiClient.getRepository(info.repositoryName, info.project);
+				const repoInfo = await apiClient.withAuthRecovery(async () => {
+					const gitApiClient = await apiClient!.getGitApi();
+					return gitApiClient.getRepository(info.repositoryName, info.project);
+				});
 				const defBranch = repoInfo?.defaultBranch?.replace(/^refs\/heads\//, '');
 				if (defBranch) { defaultTarget = defBranch; }
 				outputChannel.appendLine(`[create-pr] Default target branch from remote: ${defaultTarget}`);
@@ -2203,8 +2205,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			const info = detector.currentRemoteInfo;
 			try {
 				if (apiClient && info) {
-					const gitApiClient = await apiClient.getGitApi();
-					const repoInfo = await gitApiClient.getRepository(info.repositoryName, info.project);
+					const repoInfo = await apiClient.withAuthRecovery(async () => {
+						const gitApiClient = await apiClient!.getGitApi();
+						return gitApiClient.getRepository(info.repositoryName, info.project);
+					});
 					const defBranch = repoInfo?.defaultBranch?.replace(/^refs\/heads\//, '');
 					if (defBranch) { defaultTarget = defBranch; }
 				}
@@ -2357,21 +2361,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			try {
 				outputChannel.appendLine('[verify] Fetching repository details…');
-				const gitApi = await apiClient.getGitApi();
-
-				const repo = await gitApi.getRepository(info.repositoryName, info.project);
+				const { repo, prs } = await apiClient.withAuthRecovery(async () => {
+					const gitApi = await apiClient!.getGitApi();
+					const repo = await gitApi.getRepository(info.repositoryName, info.project);
+					const prs = await gitApi.getPullRequests(
+						info.repositoryName,
+						{ status: PullRequestStatus.Active },
+						info.project,
+					);
+					return { repo, prs };
+				});
 				outputChannel.appendLine(`[verify] Repository: ${repo.name} (id: ${repo.id})`);
 				outputChannel.appendLine(`[verify]   Default branch: ${repo.defaultBranch}`);
 				outputChannel.appendLine(`[verify]   Web URL: ${repo.remoteUrl}`);
 				outputChannel.appendLine(`[verify]   Project: ${repo.project?.name}`);
 
 				outputChannel.appendLine('[verify] Fetching open pull requests…');
-				const prs = await gitApi.getPullRequests(
-					info.repositoryName,
-					{ status: PullRequestStatus.Active },
-					info.project,
-				);
-
 				outputChannel.appendLine(`[verify] Found ${prs.length} active pull request(s):`);
 				for (const pr of prs) {
 					outputChannel.appendLine(

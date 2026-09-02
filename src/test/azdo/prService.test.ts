@@ -1,10 +1,14 @@
 import * as assert from 'assert';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { isAuthError } from '../../azdo/apiClient';
 import { PullRequestService } from '../../azdo/prService';
 
 function createService(gitApi: object): PullRequestService {
     return new PullRequestService(
-        { getGitApi: async () => gitApi } as any,
+        {
+            getGitApi: async () => gitApi,
+            withAuthRecovery: async (operation: () => Promise<unknown>) => operation(),
+        } as any,
         {
             repositoryName: 'repo',
             project: 'project',
@@ -60,5 +64,45 @@ suite('PullRequestService — findPrForCommit', () => {
         const result = await service.findPrForCommit('missing');
 
         assert.strictEqual(result, undefined);
+    });
+});
+
+suite('PullRequestService — auth recovery', () => {
+    test('reacquires the Git API client when retrying an operation', async () => {
+        const expected = { pullRequestId: 42 } as GitPullRequest;
+        let gitApiCalls = 0;
+        let operationCalls = 0;
+        const apiClient = {
+            getGitApi: async () => {
+                gitApiCalls++;
+                return {
+                    getPullRequests: async () => {
+                        operationCalls++;
+                        if (operationCalls === 1) {
+                            throw new Error('HTTP 401 Unauthorized');
+                        }
+                        return [expected];
+                    },
+                };
+            },
+            withAuthRecovery: async (operation: () => Promise<unknown>) => {
+                try {
+                    return await operation();
+                } catch (err) {
+                    if (!isAuthError(err)) { throw err; }
+                    return operation();
+                }
+            },
+        };
+        const service = new PullRequestService(apiClient as any, {
+            repositoryName: 'repo',
+            project: 'project',
+        } as any);
+
+        const result = await service.getOpenPullRequests();
+
+        assert.deepStrictEqual(result, [expected]);
+        assert.strictEqual(gitApiCalls, 2);
+        assert.strictEqual(operationCalls, 2);
     });
 });

@@ -43,6 +43,8 @@ export class AzDoApiClient implements vscode.Disposable {
     private _tenantId: string | undefined;
     /** Mutex: if a connection attempt is in-flight, subsequent callers await it. */
     private _connectingPromise: Promise<azdev.WebApi> | undefined;
+    /** Shared silent recovery attempt for concurrent API authorization failures. */
+    private _authRecoveryPromise: Promise<boolean> | undefined;
 
     constructor(
         private readonly authProvider: IAuthProvider,
@@ -225,6 +227,49 @@ export class AzDoApiClient implements vscode.Disposable {
         return true;
     }
 
+    /** Run an API operation, silently reconnecting and retrying once on an auth failure. */
+    async withAuthRecovery<T>(operation: () => Promise<T>): Promise<T> {
+        const connectionAtStart = this._connection;
+        try {
+            return await operation();
+        } catch (err) {
+            if (!isAuthError(err)) {
+                throw err;
+            }
+
+            this.log.appendLine('[api] API authorization failed — attempting silent recovery.');
+            const failedConnection = connectionAtStart ?? this._connection;
+            const recovered = await this.recoverSilently(failedConnection);
+            if (!recovered) {
+                this.log.appendLine('[api] Silent recovery unavailable.');
+                throw err;
+            }
+
+            this.log.appendLine('[api] Silent recovery succeeded — retrying API operation.');
+            return operation();
+        }
+    }
+
+    private async recoverSilently(failedConnection: azdev.WebApi | undefined): Promise<boolean> {
+        if (this._connection && this._connection !== failedConnection) {
+            return true;
+        }
+        if (this._authRecoveryPromise) {
+            return this._authRecoveryPromise;
+        }
+
+        this.resetConnection();
+        const recovery = this.tryConnectSilently();
+        this._authRecoveryPromise = recovery;
+        try {
+            return await recovery;
+        } finally {
+            if (this._authRecoveryPromise === recovery) {
+                this._authRecoveryPromise = undefined;
+            }
+        }
+    }
+
     /**
      * Invalidate the cached connection so the next call re-authenticates.
      * Useful after a 401 or when the user signs out.
@@ -259,6 +304,6 @@ export function isAuthError(err: unknown): boolean {
     if (/\b(401|403|unauthorized|forbidden)\b/i.test(msg)) { return true; }
     // Azure DevOps-specific: "TF400813: The user '…' is not authorized to access this resource."
     if (/TF400813/i.test(msg)) { return true; }
-    if (/not authorized to access/i.test(msg)) { return true; }
+    if (/\bnot authorized\b/i.test(msg)) { return true; }
     return false;
 }
