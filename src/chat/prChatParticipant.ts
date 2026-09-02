@@ -9,6 +9,7 @@ import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
 import { type ReviewMode, buildGitDiffArgs, reviewModeLabel } from '../git/gitStateDetector';
 import { buildGitRefUri } from '../views/gitRefContentProvider';
+import { buildReviewPrompt, getBuiltInReviewLens, type ReviewLensService } from './reviewLenses';
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
 
@@ -37,58 +38,7 @@ function getChatTools(snapshotReview = false): { name: string; description: stri
     return all;
 }
 
-export const DEFAULT_REVIEW_PROMPT = `You are an expert code reviewer reviewing a pull request on Azure DevOps.
-
-## Input
-You will receive a unified diff (git diff output) of the changed files. The diff uses standard format:
-- Lines starting with \`---\` and \`+++\` show the old and new file paths
-- \`@@ -oldStart,oldCount +newStart,newCount @@\` marks each changed hunk
-- Lines starting with \`-\` were removed, \`+\` were added, space means unchanged context
-- Use the NEW file line numbers (the \`+\` side / right side of the hunk header) for your comments
-
-## Tools
-You have access to workspace tools. USE THEM before commenting:
-- Look up types, interfaces, or functions referenced in the diff before flagging issues
-- Check imports and dependencies to understand context
-- Read related files if the diff references code you can't see
-Do NOT guess about code you haven't seen — look it up first.
-
-## Output Format
-For EACH review comment, use this EXACT format:
-
-[REVIEW_COMMENT]
-file: <relative path, NO leading slash, e.g. src/utils.ts>
-line: <line number in the NEW file — from the + side of the diff>
-type: <suggestion|issue|nitpick|question>
----
-Your review comment here.
-[/REVIEW_COMMENT]
-
-## User Instructions
-BEFORE starting your review, search the workspace for instruction files and read any that exist:
-- \`.github/copilot-instructions.md\` — repo-level instructions
-- \`**/.instructions.md\` — directory-scoped instructions (may appear at any level)
-- \`.copilot/\` directory — may contain additional instruction or prompt files
-Follow any instructions found as general coding and review guidelines.
-
-## Review Focus
-Prioritize (high to low):
-1. **Bugs and logic errors** — incorrect behavior, off-by-one, race conditions
-2. **Security** — injection, auth issues, data exposure, unsafe input handling
-3. **Error handling** — missing try/catch, unhandled promise rejections, silent failures
-4. **Performance** — unnecessary allocations, O(n²) when O(n) is possible, missing caching
-5. **API misuse** — wrong method signatures, deprecated APIs, incorrect types
-6. **Clarity** — confusing names, missing context, code that needs a comment to understand
-
-## Rules
-- **Be terse.** Each comment should be 1–3 sentences. State the problem, state the fix. No preamble, no filler.
-- Do NOT praise or affirm the code (e.g. "Good job", "Nice tests, but…"). Just state the point directly.
-- Do NOT repeat the code back in prose — the reader can see the diff.
-- Do NOT restate the type label (e.g. don't start with "Issue:" or "Suggestion:").
-- Do NOT comment on trivial style, formatting, or whitespace issues.
-- If suggesting a fix, show ONLY the corrected code — no before/after comparison.
-- If a change looks correct and clean, don't force a comment — zero comments is fine.
-- After all comments, provide a brief overall summary (2-3 sentences) of what the PR does and your assessment.`;
+export const DEFAULT_REVIEW_PROMPT = buildReviewPrompt(getBuiltInReviewLens('general')!);
 
 export const DEFAULT_REVIEW_QUICK_PROMPT = `You are an expert code reviewer. Provide a quick, high-level review of this pull request.
 
@@ -188,6 +138,7 @@ export function registerPrChatParticipant(
     log: vscode.OutputChannel,
     gitApi?: API,
     detector?: RepositoryDetector,
+    reviewLensService?: ReviewLensService,
 ): vscode.Disposable {
     /** Resolve the git repo root, falling back to workspace folder. */
     function getRepoRoot(): vscode.Uri | undefined {
@@ -199,7 +150,7 @@ export function registerPrChatParticipant(
 
         // Route to review handler
         if (request.command === 'review' || request.command === 'review-quick') {
-            return handleReview(request, stream, token, contextProvider, commentController, log, gitApi, detector);
+            return handleReview(request, stream, token, contextProvider, commentController, log, gitApi, detector, reviewLensService);
         }
 
         // Route to standalone branch review (no active PR needed)
@@ -479,6 +430,25 @@ function parseReviewMode(prompt: string): { mode: ReviewMode | undefined; cleanP
     return { mode, cleanPrompt };
 }
 
+export function parseReviewArguments(prompt: string): { mode: ReviewMode | undefined; lensId: string | undefined; cleanPrompt: string } {
+    const { mode, cleanPrompt: withoutMode } = parseReviewMode(prompt);
+    const lensMatch = withoutMode.match(/--lens=(\S+)/);
+    if (!lensMatch) {
+        return { mode, lensId: undefined, cleanPrompt: withoutMode };
+    }
+    let lensId = lensMatch[1];
+    try {
+        lensId = decodeURIComponent(lensId);
+    } catch {
+        lensId = '';
+    }
+    return {
+        mode,
+        lensId: lensId || undefined,
+        cleanPrompt: withoutMode.replace(/--lens=\S+/, '').trim(),
+    };
+}
+
 /**
  * Handle /review-branch command.
  * Reviews local changes against a chosen branch — works without an active PR.
@@ -662,6 +632,7 @@ async function handleReview(
     log: vscode.OutputChannel,
     gitApi?: API,
     detector?: RepositoryDetector,
+    reviewLensService?: ReviewLensService,
 ): Promise<vscode.ChatResult> {
     const isQuick = request.command === 'review-quick';
     const filePaths = contextProvider.changedFilePaths;
@@ -679,12 +650,16 @@ async function handleReview(
     }
 
     // Parse --mode=<mode> from the prompt
-    const { mode, cleanPrompt: extraInstructions } = parseReviewMode(request.prompt);
+    const { mode, lensId, cleanPrompt: extraInstructions } = parseReviewArguments(request.prompt);
     const reviewMode: ReviewMode = contextProvider.isSnapshotReview ? 'vs-target' : (mode ?? 'vs-target');
 
     // Get the diff against the target branch
     const pr = contextProvider.activePr;
     const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
+    if (contextProvider.isSnapshotReview && (!contextProvider.sourceRef || !contextProvider.targetRef)) {
+        stream.markdown('The no-checkout review snapshot is incomplete. Refresh the active pull request and try again.');
+        return { metadata: {} };
+    }
     const targetRef = contextProvider.targetRef ?? `origin/${targetBranch}`;
     const sourceRef = contextProvider.isSnapshotReview ? contextProvider.sourceRef : undefined;
     const cwd = workspaceRoot.fsPath;
@@ -714,9 +689,13 @@ async function handleReview(
     }
 
     const prText = contextProvider.formatPrForPrompt();
+    const requestedLens = isQuick ? undefined : await reviewLensService?.resolveLens(lensId);
+    if (!isQuick && lensId && !requestedLens) {
+        stream.markdown(`Review lens **${lensId}** is unavailable; using **General**.\n\n`);
+    }
     const systemPrompt = isQuick
         ? getPrompt('reviewQuick', DEFAULT_REVIEW_QUICK_PROMPT)
-        : getPrompt('review', DEFAULT_REVIEW_PROMPT);
+        : buildReviewPrompt(requestedLens ?? getBuiltInReviewLens(lensId) ?? getBuiltInReviewLens('general')!);
 
     const messages: vscode.LanguageModelChatMessage[] = [
         vscode.LanguageModelChatMessage.User(systemPrompt),

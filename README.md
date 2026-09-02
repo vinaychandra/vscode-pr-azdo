@@ -84,12 +84,27 @@ A Copilot Chat participant that helps resolve PR comments and review code:
 - **`/explain`** — explain what a comment is asking for
 - **`/review`** — full AI code review of all changed files with inline draft comments
 - **`/review-quick`** — high-level summary of PR changes and key concerns
+- **Review Lenses** — every **Review with Copilot** run starts by choosing a focused review style: General, Bugs, Security, Architecture, Performance, or one of your custom lenses
 - **Context-aware review scope** — when your working tree is dirty or has unpushed commits, a QuickPick lets you choose exactly what to review: staged changes, unstaged changes, all uncommitted changes, unpushed commits only, or everything vs the remote target
 - **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change; applying requires a current-repository or worktree checkout because it edits local files
 - **Post Reply** button — post an AI-drafted reply directly to Azure DevOps; the reply is prefilled as an editable inline comment so you can review and edit it in context before posting
 - Uses workspace tools for checked-out reviews and commit-backed read/search tools for no-checkout reviews
 - **Honors Copilot instruction files** — automatically reads `.github/copilot-instructions.md`, `**/.instructions.md`, and `.copilot/` directory contents before responding, so your repo-level and directory-scoped coding guidelines are respected
-- Customizable system prompts via settings (`vscode-pr-azdo.prompts.*`)
+- Customizable comment-resolution and quick-review prompts via settings (`vscode-pr-azdo.prompts.*`)
+
+### Review Lenses
+
+A review lens controls **how** Copilot inspects a change, independently from the review scope that controls **which** local changes are included:
+
+- **General** — balanced correctness, security, reliability, performance, and maintainability review
+- **Bugs** — logic errors, edge cases, races, invalid assumptions, and broken failure paths
+- **Security** — trust boundaries, authorization, injection, secrets, and data exposure
+- **Architecture** — ownership, coupling, contracts, extensibility, and maintainability
+- **Performance** — complexity, repeated work, allocations, I/O, caching, and scalability
+
+Choose **Create New Lens...** in the lens picker to create a reusable custom lens. Custom lenses are Markdown files stored in the extension's global storage and are available in every workspace. Use the Edit and Delete buttons beside a custom lens, or run **Azure DevOps PR: Manage Review Lenses** from the Command Palette.
+
+Existing values from the deprecated `vscode-pr-azdo.prompts.review` setting are imported once as a **Migrated Review** custom lens. The extension always combines lens instructions with its structured output protocol, so custom lenses should describe review priorities rather than repeat the response format.
 
 ### Subfolder Workspace Support
 
@@ -134,6 +149,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Stop No-Checkout Review`                  | Return the Active PR view to current-branch detection |
 | `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
 | `Review with Copilot`                      | Start an AI code review of the active PR             |
+| `Azure DevOps PR: Manage Review Lenses`    | Create, edit, or delete global custom review lenses  |
 | `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |
 | `Azure DevOps PR: View Default Prompts`    | View the built-in system prompts                     |
 

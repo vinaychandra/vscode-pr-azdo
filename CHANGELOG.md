@@ -8,6 +8,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 
+- **Copilot Review Lenses** — Review with Copilot now offers General, Bugs, Security, Architecture, and Performance lenses before choosing the Git review scope. Users can create, edit, and delete reusable global Markdown lenses, and existing custom detailed-review prompts are migrated into a custom lens.
 - **No-checkout pull request reviews** — the Review Pull Request picker can now pin a PR without switching branches or creating a worktree. Source and target commits are fetched into extension-owned Git refs and used for read-only diffs, comments, drafts, suggestions, and AI review while the working tree, index, current branch, and local branches remain unchanged.
 - **Reusable review worktree checkout** — each checkout action lets you choose between the current repository and one detached review worktree. The default sibling path is `<repo>.worktrees/review`, it can be customized in settings, and clean worktrees are reused when switching reviews. Dirty review worktrees are left untouched.
 

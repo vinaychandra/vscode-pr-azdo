@@ -15,13 +15,14 @@ import { computeRelativePath, extractPathFromGitRefUri, getWorkspaceFileUriFromD
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
+import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, fetchPullRequestSnapshot, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
 import { reviewedFilesStateKey } from './views/reviewState';
 import { chooseCheckoutMode } from './views/checkoutMode';
 import { DraftPersistenceManager } from './views/draftPersistence';
+import { BUILT_IN_REVIEW_LENSES, REVIEW_PROTOCOL_PROMPT, ReviewLensService, buildReviewChatQuery } from './chat/reviewLenses';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 const REVIEW_WORKTREE_OPEN_KEY = 'reviewWorktreeOpenPath';
@@ -137,7 +138,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// --- AI Chat Participant & Context Provider ---
 	const prContextProvider = new PrContextProvider();
-	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi, detector);
+	const reviewLensService = new ReviewLensService(context, outputChannel);
+	try {
+		await reviewLensService.initialize();
+	} catch (err) {
+		outputChannel.appendLine(`[review-lens] Initialization failed: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi, detector, reviewLensService);
 	registerPrTools(context, prContextProvider, outputChannel, gitApi, detector);
 
 	// --- Review Mode ---
@@ -1338,10 +1345,15 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- AI: Review PR from sidebar button ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
+			const lens = await reviewLensService.chooseLens();
+			if (!lens) {
+				outputChannel.appendLine('[ai] reviewWithAI: user cancelled lens selection');
+				return;
+			}
 			if (activePrProvider?.isSnapshotReview) {
-				outputChannel.appendLine('[ai] reviewWithAI: reviewing pinned PR snapshot');
+				outputChannel.appendLine(`[ai] reviewWithAI: reviewing pinned PR snapshot with lens=${lens.id}`);
 				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: '@azdo-pr /review --mode=vs-target',
+					query: buildReviewChatQuery(lens.id, 'vs-target'),
 				});
 				return;
 			}
@@ -1350,7 +1362,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!repo) {
 				outputChannel.appendLine('[ai] reviewWithAI: no git repo found');
 				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: '@azdo-pr /review',
+					query: buildReviewChatQuery(lens.id),
 				});
 				return;
 			}
@@ -1366,25 +1378,29 @@ export async function activate(context: vscode.ExtensionContext) {
 				// Scenario 1: clean + pushed → auto-proceed
 				outputChannel.appendLine('[ai] reviewWithAI: clean+pushed → opening review with vs-target');
 				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: '@azdo-pr /review --mode=vs-target',
+					query: buildReviewChatQuery(lens.id, 'vs-target'),
 				});
 				return;
 			}
 
 			const picked = await vscode.window.showQuickPick<ReviewQuickPickItem>(options, {
 				placeHolder: 'What do you want to review?',
-				title: 'Review with Copilot',
+				title: 'Choose Review Scope',
 			});
 			if (!picked) {
 				outputChannel.appendLine('[ai] reviewWithAI: user cancelled QuickPick');
 				return;
 			}
 
-			outputChannel.appendLine(`[ai] reviewWithAI: user selected mode=${picked.reviewMode}`);
+			outputChannel.appendLine(`[ai] reviewWithAI: lens=${lens.id}, mode=${picked.reviewMode}`);
 			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: `@azdo-pr /review --mode=${picked.reviewMode}`,
+				query: buildReviewChatQuery(lens.id, picked.reviewMode),
 			});
 		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.manageReviewLenses', () => reviewLensService.chooseLens(true)),
 	);
 
 	// --- AI: Reset prompts to defaults ---
@@ -1392,9 +1408,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.resetPrompts', async () => {
 			const config = vscode.workspace.getConfiguration('vscode-pr-azdo.prompts');
 			await config.update('fixComment', undefined, vscode.ConfigurationTarget.Global);
-			await config.update('review', undefined, vscode.ConfigurationTarget.Global);
 			await config.update('reviewQuick', undefined, vscode.ConfigurationTarget.Global);
-			vscode.window.showInformationMessage('AI prompts reset to defaults.');
+			vscode.window.showInformationMessage('Comment and quick-review prompts reset to defaults. Review Lenses were not changed.');
 			outputChannel.appendLine('[ext] AI prompts reset to defaults');
 		}),
 	);
@@ -1405,8 +1420,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			const content = [
 				'# Azure DevOps PR — Default AI Prompts',
 				'',
-				'Copy any section below into the corresponding setting to customize it.',
-				'Settings: `vscode-pr-azdo.prompts.fixComment`, `.review`, `.reviewQuick`',
+				'Comment and quick-review prompts can be customized in settings. Detailed reviews use Review Lenses.',
+				'Settings: `vscode-pr-azdo.prompts.fixComment`, `.reviewQuick`',
 				'',
 				'---',
 				'',
@@ -1418,11 +1433,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				'',
 				'---',
 				'',
-				'## /review — Detailed Code Review',
+				'## /review — Structured Review Protocol',
 				'',
 				'```',
-				DEFAULT_REVIEW_PROMPT,
+				REVIEW_PROTOCOL_PROMPT,
 				'```',
+				...BUILT_IN_REVIEW_LENSES.flatMap(lens => [
+					'',
+					`### Review Lens: ${lens.name}`,
+					'',
+					lens.prompt,
+				]),
 				'',
 				'---',
 				'',

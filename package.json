@@ -241,6 +241,10 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "vscode-pr-azdo.manageReviewLenses",
+        "title": "Azure DevOps PR: Manage Review Lenses"
+      },
+      {
         "command": "vscode-pr-azdo.resetPrompts",
         "title": "Azure DevOps PR: Reset AI Prompts to Defaults"
       },
@@ -613,7 +617,8 @@
         "vscode-pr-azdo.prompts.review": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Custom system prompt for the `/review` command (detailed code review). Leave empty to use the default. Run `Azure DevOps PR: View Default Prompts` to see the defaults.",
+          "markdownDescription": "Deprecated. Existing values are migrated to a global custom Review Lens. Use **Azure DevOps PR: Manage Review Lenses** instead.",
+          "deprecationMessage": "Detailed review prompts are now managed as Review Lenses.",
           "editPresentation": "multilineText"
         },
         "vscode-pr-azdo.prompts.reviewQuick": {
