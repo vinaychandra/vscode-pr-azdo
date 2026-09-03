@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.15]
+
 ### Added
 
 - **Review pull requests from an Azure DevOps URL** — paste a PR URL from the command palette or Pull Requests toolbar. PRs in the current repository retain all checkout choices; PRs from other repositories open exclusively as no-checkout reviews with repository-scoped comments, drafts, and reviewed-file state.
