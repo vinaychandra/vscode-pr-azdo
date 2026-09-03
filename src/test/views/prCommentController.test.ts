@@ -605,6 +605,30 @@ suite('PrCommentController', () => {
         detector.dispose();
     });
 
+    test('clearDrafts disposes visible drafts before the current PR is marked rendered', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        controller.setPrContext({} as any, 1, ['src/one.ts']);
+        await controller.updateThreads([]);
+        controller.createDraftThread('src/one.ts', 1, 'old PR draft');
+
+        controller.setPrContext({} as any, 2, ['src/two.ts']);
+        controller.createDraftThread('src/two.ts', 2, 'new PR draft');
+        assert.strictEqual(controller.draftCount, 1);
+
+        controller.clearDrafts();
+
+        assert.strictEqual(controller.draftCount, 0);
+        assert.deepStrictEqual(controller.serializeDraftsForPr(2).aiDrafts, []);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
     test('hides drafts with Review Mode and restores them when enabled', async () => {
         const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
         const api = makeGitApi([repo]);

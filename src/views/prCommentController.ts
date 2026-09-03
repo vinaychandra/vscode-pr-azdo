@@ -983,22 +983,21 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Dispose all draft threads. */
     clearDrafts(): void {
-        if (this._prId && this._renderedDraftPrId !== this._prId) {
+        let cachedCount = 0;
+        if (this._prId) {
             const cached = this._draftsByPr.get(this._prId);
             if (cached?.aiDrafts.length) {
+                cachedCount = cached.aiDrafts.length;
                 this._draftsByPr.set(this._prId, { ...cached, aiDrafts: [] });
-                this.log.appendLine(`[comments] Cleared ${cached.aiDrafts.length} hidden draft(s)`);
-                this._onDidPerformAction.fire();
             }
-            return;
         }
         for (const t of this._draftThreads) {
             t.dispose();
         }
-        const count = this._draftThreads.length;
+        const renderedCount = this._draftThreads.length;
         this._draftThreads = [];
-        this.log.appendLine(`[comments] Cleared ${count} draft(s)`);
-        if (count > 0) {
+        this.log.appendLine(`[comments] Cleared ${renderedCount} rendered and ${cachedCount} cached draft(s)`);
+        if (renderedCount > 0 || cachedCount > 0) {
             this._onDidPerformAction.fire();
         }
     }
