@@ -31,6 +31,15 @@ export class PullRequestService {
         ));
     }
 
+    /** Get one pull request by repository-scoped ID. */
+    async getPullRequest(pullRequestId: number): Promise<GitPullRequest> {
+        return this.withGitApi(git => git.getPullRequest(
+            this.remoteInfo.repositoryName,
+            pullRequestId,
+            this.remoteInfo.project,
+        ));
+    }
+
     /** Active pull requests created by the given user. */
     async getMyPullRequests(userId: string): Promise<GitPullRequest[]> {
         return this.withGitApi(git => git.getPullRequests(

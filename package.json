@@ -123,6 +123,11 @@
         "icon": "$(arrow-down)"
       },
       {
+        "command": "vscode-pr-azdo.reviewPullRequestFromUrl",
+        "title": "Review Pull Request from URL",
+        "icon": "$(link-external)"
+      },
+      {
         "command": "vscode-pr-azdo.stopReview",
         "title": "Stop No-Checkout Review",
         "icon": "$(close)"
@@ -287,6 +292,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "vscode-pr-azdo.reviewPullRequestFromUrl",
+          "when": "view == azdo-pr.pullRequests && vscode-pr-azdo:hasAzDoRepo",
+          "group": "navigation@1"
+        },
         {
           "command": "vscode-pr-azdo.refreshPullRequests",
           "when": "view == azdo-pr.pullRequests",

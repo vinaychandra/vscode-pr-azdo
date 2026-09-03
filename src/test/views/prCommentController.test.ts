@@ -605,6 +605,32 @@ suite('PrCommentController', () => {
         detector.dispose();
     });
 
+    test('keeps drafts separate for the same PR ID in different repositories', async () => {
+        const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
+        const api = makeGitApi([repo]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+
+        controller.setPrContext({} as any, 42, ['src/one.ts'], undefined, undefined, undefined, undefined, 'external:org/project/one/42');
+        await controller.updateThreads([]);
+        controller.createDraftThread('src/one.ts', 1, 'repo one draft');
+
+        controller.setPrContext({} as any, 42, ['src/two.ts'], undefined, undefined, undefined, undefined, 'external:org/project/two/42');
+        await controller.updateThreads([]);
+        assert.strictEqual(controller.draftCount, 0);
+        controller.createDraftThread('src/two.ts', 2, 'repo two draft');
+
+        controller.setPrContext({} as any, 42, ['src/one.ts'], undefined, undefined, undefined, undefined, 'external:org/project/one/42');
+        await controller.updateThreads([]);
+
+        assert.strictEqual(controller.serializeDrafts().aiDrafts[0]?.body, 'repo one draft');
+        assert.strictEqual(controller.serializeDraftsForPr('external:org/project/two/42').aiDrafts[0]?.body, 'repo two draft');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
     test('clearDrafts disposes visible drafts before the current PR is marked rendered', async () => {
         const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], '/home/user/myrepo');
         const api = makeGitApi([repo]);

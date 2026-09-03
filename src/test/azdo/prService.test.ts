@@ -16,6 +16,22 @@ function createService(gitApi: object): PullRequestService {
     );
 }
 
+suite('PullRequestService — getPullRequest', () => {
+    test('fetches one PR from the configured repository and project', async () => {
+        const expected = { pullRequestId: 42 } as GitPullRequest;
+        const calls: unknown[][] = [];
+        const service = createService({
+            getPullRequest: async (...args: unknown[]) => {
+                calls.push(args);
+                return expected;
+            },
+        });
+
+        assert.strictEqual(await service.getPullRequest(42), expected);
+        assert.deepStrictEqual(calls, [['repo', 42, 'project']]);
+    });
+});
+
 suite('PullRequestService — findPrForCommit', () => {
     test('matches the active PR source tip without fetching commit lists', async () => {
         const expected = {

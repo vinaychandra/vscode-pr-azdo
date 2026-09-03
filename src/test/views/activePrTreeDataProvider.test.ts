@@ -148,6 +148,10 @@ suite('ActivePrTreeDataProvider — reviewed-file state', () => {
         assert.notStrictEqual(reviewedFilesStateKey(41), reviewedFilesStateKey(42));
     });
 
+    test('uses a distinct persistence key for the same PR ID in another repository', () => {
+        assert.notStrictEqual(reviewedFilesStateKey(42), reviewedFilesStateKey('external:org/project/repo/42'));
+    });
+
     test('clears reviewed files when the active pull request changes', async () => {
         let currentPr = { pullRequestId: 41, title: 'First PR' } as GitPullRequest;
         const provider = new ActivePrTreeDataProvider(
@@ -1250,6 +1254,41 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         assert.strictEqual(provider.reviewContext?.sourceRef, 'source-sha');
         assert.strictEqual(provider.reviewContext?.targetRef, 'target-sha');
         assert.strictEqual(findCalls, callsBeforeBranchChange);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('uses a snapshot repository service until the review stops', async () => {
+        let workspaceIterationCalls = 0;
+        let snapshotIterationCalls = 0;
+        const workspaceService = createMockPrService({
+            getPrIterations: async () => {
+                workspaceIterationCalls++;
+                return [];
+            },
+        });
+        const snapshotService = createMockPrService({
+            getPrIterations: async () => {
+                snapshotIterationCalls++;
+                return [];
+            },
+        });
+        const harness = makeMutableGitApi('local/main', 'local-commit');
+        const provider = new ActivePrTreeDataProvider(workspaceService, harness.api, createMockLog());
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        const snapshotPr = { pullRequestId: 42, title: 'External snapshot' } as GitPullRequest;
+        provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha', snapshotService);
+        const root = (await provider.getChildren())[1] as ActivePrRootItem;
+        await provider.getChildren(root);
+
+        assert.strictEqual(snapshotIterationCalls, 1);
+        assert.strictEqual(workspaceIterationCalls, 0);
+
+        provider.stopSnapshotReview(workspaceService);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.strictEqual(provider.isSnapshotReview, false);
 
         provider.dispose();
         harness.dispose();

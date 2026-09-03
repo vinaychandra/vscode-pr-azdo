@@ -200,4 +200,20 @@ suite('reviewWorktree', () => {
         assert.strictEqual(fs.readFileSync(path.join(clone, 'file.txt'), 'utf-8'), 'dirty working copy');
         assert.strictEqual(git(clone, 'branch', '--list', 'feature/test'), '');
     });
+
+    test('fetches a PR snapshot directly from a repository path', async () => {
+        const remote = createRepository();
+        cleanup.push(remote);
+        git(remote, 'branch', '-M', 'main');
+        git(remote, 'checkout', '-b', 'feature/direct');
+        const clone = createRepository();
+        cleanup.push(clone);
+
+        const snapshot = await fetchPullRequestSnapshot(
+            clone, remote, 43, 'refs/heads/feature/direct', 'refs/heads/main',
+        );
+
+        assert.strictEqual(snapshot.sourceCommit, git(remote, 'rev-parse', 'feature/direct'));
+        assert.strictEqual(snapshot.targetCommit, git(remote, 'rev-parse', 'main'));
+    });
 });

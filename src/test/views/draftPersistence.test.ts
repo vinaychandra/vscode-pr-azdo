@@ -13,9 +13,9 @@ suite('DraftPersistenceManager', () => {
         const workspaceState = {
             update: async (key: string, value: PersistedDrafts) => { saved.set(key, value); },
         } as unknown as vscode.Memento;
-        const snapshots = new Map<number, PersistedDrafts>([
+        const snapshots = new Map<number | string, PersistedDrafts>([
             [1, { aiDrafts: [{ filePath: 'one.ts', line: 1, body: 'one' }], userDrafts: [], replyDrafts: [] }],
-            [2, { aiDrafts: [], userDrafts: [], replyDrafts: [] }],
+            ['org/project/other/2', { aiDrafts: [], userDrafts: [], replyDrafts: [] }],
         ]);
         const manager = new DraftPersistenceManager(
             workspaceState,
@@ -25,11 +25,11 @@ suite('DraftPersistenceManager', () => {
         );
 
         manager.schedule(1);
-        manager.schedule(2);
+        manager.schedule('org/project/other/2');
         await manager.flush();
 
         assert.deepStrictEqual(saved.get('draftComments-1'), snapshots.get(1));
-        assert.deepStrictEqual(saved.get('draftComments-2'), snapshots.get(2));
+        assert.deepStrictEqual(saved.get('draftComments-org/project/other/2'), snapshots.get('org/project/other/2'));
         manager.dispose();
     });
 

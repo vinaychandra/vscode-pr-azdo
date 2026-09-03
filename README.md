@@ -146,6 +146,7 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Filter Comments`                          | Switch between Active and All comment threads        |
 | `Refresh`                                  | Re-fetch PR list or active PR data                   |
 | `Review Pull Request`                      | Choose a checkout, worktree, or no-checkout review    |
+| `Review Pull Request from URL`             | Review a pasted PR; external repositories use no-checkout mode |
 | `Stop No-Checkout Review`                  | Return the Active PR view to current-branch detection |
 | `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
 | `Review with Copilot`                      | Start an AI code review of the active PR             |

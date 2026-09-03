@@ -248,7 +248,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     constructor(
-        private readonly prService: PullRequestService,
+        private prService: PullRequestService,
         private readonly gitApi: API,
         private readonly log: vscode.OutputChannel,
         private readonly onAuthError?: () => void,
@@ -363,16 +363,27 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         void this.detectActivePr();
     }
 
-    pinSnapshotReview(pr: GitPullRequest, sourceRef: string, targetRef: string): void {
+    pinSnapshotReview(
+        pr: GitPullRequest,
+        sourceRef: string,
+        targetRef: string,
+        snapshotPrService?: PullRequestService,
+    ): void {
         this._detectionGeneration++;
         this._lastDetectedBranch = undefined;
         this._lastDetectedCommit = undefined;
+        if (snapshotPrService) {
+            this.prService = snapshotPrService;
+        }
         this.setActivePr(pr, { pr, mode: 'snapshot', sourceRef, targetRef }, true);
     }
 
-    stopSnapshotReview(): void {
+    stopSnapshotReview(workspacePrService?: PullRequestService): void {
         if (!this.isSnapshotReview) { return; }
         this._detectionGeneration++;
+        if (workspacePrService) {
+            this.prService = workspacePrService;
+        }
         this.setActivePr(undefined);
         this._lastDetectedBranch = undefined;
         this._lastDetectedCommit = undefined;

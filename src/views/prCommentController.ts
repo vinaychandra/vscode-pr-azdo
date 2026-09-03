@@ -58,9 +58,10 @@ export class PrCommentController implements vscode.Disposable {
     /** Source commit for a no-checkout review; when set, right-side content is virtual. */
     private _sourceRef: string | undefined;
 
-    /** Session-local snapshots keyed by PR so drafts survive context and visibility changes. */
-    private _draftsByPr = new Map<number, PersistedDrafts>();
-    private _renderedDraftPrId: number | undefined;
+    /** Session-local snapshots keyed by review scope so drafts survive context and visibility changes. */
+    private _draftsByPr = new Map<number | string, PersistedDrafts>();
+    private _draftScope: number | string | undefined;
+    private _renderedDraftScope: number | string | undefined;
 
     private _prService: PullRequestService | undefined;
     private _prId: number | undefined;
@@ -152,19 +153,21 @@ export class PrCommentController implements vscode.Disposable {
         changeTypes?: ReadonlyMap<string, number>,
         targetRef?: string,
         sourceRef?: string,
+        draftScope: number | string | undefined = prId,
     ): void {
-        if (prId !== this._prId) {
+        if (draftScope !== this._draftScope) {
             this.cacheRenderedDrafts();
             this.clearRenderedDrafts();
         }
         this._prService = prService;
         this._prId = prId;
+        this._draftScope = draftScope;
         this._prFilePaths = new Set(prFilePaths ?? []);
         this._currentUserId = currentUserId;
         this._changeTypes = changeTypes ? new Map(changeTypes) : new Map();
         this._targetRef = targetRef;
         this._sourceRef = sourceRef;
-        this.log.appendLine(`[comments] setPrContext: prId=${prId}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}, sourceRef=${sourceRef ?? '(working tree)'}`);
+        this.log.appendLine(`[comments] setPrContext: prId=${prId}, draftScope=${draftScope ?? '(none)'}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}, sourceRef=${sourceRef ?? '(working tree)'}`);
 
         // Re-assign the commenting range provider so VS Code re-queries
         // provideCommentingRanges for all already-open editors.
@@ -893,8 +896,8 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     private cacheRenderedDrafts(): void {
-        if (!this._prId || this._renderedDraftPrId !== this._prId) { return; }
-        this._draftsByPr.set(this._prId, this.serializeRenderedDrafts());
+        if (this._draftScope === undefined || this._renderedDraftScope !== this._draftScope) { return; }
+        this._draftsByPr.set(this._draftScope, this.serializeRenderedDrafts());
     }
 
     private clearRenderedDrafts(): void {
@@ -912,25 +915,25 @@ export class PrCommentController implements vscode.Disposable {
         this._userDraftPositions.clear();
         this._replyDraftThreads.clear();
         this._replyDraftBodies.clear();
-        this._renderedDraftPrId = undefined;
+        this._renderedDraftScope = undefined;
     }
 
     private restoreCurrentPrDrafts(): void {
-        if (!this._reviewMode || !this._prId) { return; }
-        const data = this._draftsByPr.get(this._prId);
+        if (!this._reviewMode || this._draftScope === undefined) { return; }
+        const data = this._draftsByPr.get(this._draftScope);
         if (!data) {
-            this._renderedDraftPrId = this._prId;
+            this._renderedDraftScope = this._draftScope;
             return;
         }
 
         let restored = 0;
-        if (this._renderedDraftPrId !== this._prId) {
-            this._renderedDraftPrId = this._prId;
+        if (this._renderedDraftScope !== this._draftScope) {
+            this._renderedDraftScope = this._draftScope;
             restored += this.restoreStandaloneDrafts(data);
         }
         restored += this.restoreReplyDrafts(data.replyDrafts ?? []);
         if (restored > 0) {
-            this.log.appendLine(`[comments] Restored ${restored} cached draft(s) for PR ${this._prId}`);
+                this.log.appendLine(`[comments] Restored ${restored} cached draft(s) for review ${this._draftScope}`);
         }
     }
 
@@ -984,11 +987,11 @@ export class PrCommentController implements vscode.Disposable {
     /** Dispose all draft threads. */
     clearDrafts(): void {
         let cachedCount = 0;
-        if (this._prId) {
-            const cached = this._draftsByPr.get(this._prId);
+        if (this._draftScope !== undefined) {
+            const cached = this._draftsByPr.get(this._draftScope);
             if (cached?.aiDrafts.length) {
                 cachedCount = cached.aiDrafts.length;
-                this._draftsByPr.set(this._prId, { ...cached, aiDrafts: [] });
+                this._draftsByPr.set(this._draftScope, { ...cached, aiDrafts: [] });
             }
         }
         for (const t of this._draftThreads) {
@@ -1172,10 +1175,10 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Dispose all user draft threads. */
     clearUserDrafts(): void {
-        if (this._prId && this._renderedDraftPrId !== this._prId) {
-            const cached = this._draftsByPr.get(this._prId);
+        if (this._draftScope !== undefined && this._renderedDraftScope !== this._draftScope) {
+            const cached = this._draftsByPr.get(this._draftScope);
             if (cached?.userDrafts.length) {
-                this._draftsByPr.set(this._prId, { ...cached, userDrafts: [] });
+                this._draftsByPr.set(this._draftScope, { ...cached, userDrafts: [] });
                 this.log.appendLine(`[comments] Cleared ${cached.userDrafts.length} hidden user draft(s)`);
                 this._onDidPerformAction.fire();
             }
@@ -1327,18 +1330,18 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Serialize the active PR's drafts into a JSON-safe object for persistence. */
     serializeDrafts(): PersistedDrafts {
-        if (this._prId && this._renderedDraftPrId !== this._prId) {
-            return this._draftsByPr.get(this._prId) ?? emptyPersistedDrafts();
+        if (this._draftScope !== undefined && this._renderedDraftScope !== this._draftScope) {
+            return this._draftsByPr.get(this._draftScope) ?? emptyPersistedDrafts();
         }
         return this.serializeRenderedDrafts();
     }
 
     /** Return a snapshot for any PR, including one that is not currently rendered. */
-    serializeDraftsForPr(prId: number): PersistedDrafts {
-        if (prId === this._prId && this._renderedDraftPrId === prId) {
+    serializeDraftsForPr(reviewScope: number | string): PersistedDrafts {
+        if (reviewScope === this._draftScope && this._renderedDraftScope === reviewScope) {
             return this.serializeRenderedDrafts();
         }
-        return this._draftsByPr.get(prId) ?? emptyPersistedDrafts();
+        return this._draftsByPr.get(reviewScope) ?? emptyPersistedDrafts();
     }
 
     private serializeRenderedDrafts(): PersistedDrafts {
@@ -1386,9 +1389,9 @@ export class PrCommentController implements vscode.Disposable {
      * Call after PR context and threads are loaded so reply drafts can attach to existing threads.
      */
     restoreDrafts(data: PersistedDrafts): void {
-        if (this._prId) {
+        if (this._draftScope !== undefined) {
             this.clearRenderedDrafts();
-            this._draftsByPr.set(this._prId, data);
+            this._draftsByPr.set(this._draftScope, data);
             this.restoreCurrentPrDrafts();
             return;
         }
