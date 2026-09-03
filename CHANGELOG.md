@@ -6,9 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.14]
+
 ### Fixed
 
+- **Clear All Drafts now removes visible AI comments** — clearing AI drafts during pull request context refreshes now removes both cached drafts and rendered VS Code comment threads.
 - **AI reviews no longer flag target-only changes as regressions** — `vs-target` reviews now diff from the source and target merge base, so updates made only on the target branch are not presented to Copilot as reversals introduced by the pull request.
+- **Dependency security advisory** — updated the transitive `qs` package to `6.16.0` to resolve its denial-of-service vulnerability.
 
 ## [0.0.13]
 
