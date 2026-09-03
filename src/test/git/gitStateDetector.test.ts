@@ -32,14 +32,14 @@ suite('buildGitDiffArgs', () => {
         assert.deepStrictEqual(args, ['diff', 'origin/HEAD..HEAD']);
     });
 
-    test('vs-target with files → git diff origin/main -- file1 file2', () => {
+    test('vs-target with files uses the merge base', () => {
         const args = buildGitDiffArgs('vs-target', 'origin/main', 'origin/feature', ['src/a.ts', 'src/b.ts']);
-        assert.deepStrictEqual(args, ['diff', 'origin/main', '--', 'src/a.ts', 'src/b.ts']);
+        assert.deepStrictEqual(args, ['diff', '--merge-base', 'origin/main', '--', 'src/a.ts', 'src/b.ts']);
     });
 
-    test('vs-target without files → git diff origin/main', () => {
+    test('vs-target without files uses the merge base', () => {
         const args = buildGitDiffArgs('vs-target', 'origin/main', 'origin/feature', []);
-        assert.deepStrictEqual(args, ['diff', 'origin/main']);
+        assert.deepStrictEqual(args, ['diff', '--merge-base', 'origin/main']);
     });
 
     test('staged ignores file paths', () => {

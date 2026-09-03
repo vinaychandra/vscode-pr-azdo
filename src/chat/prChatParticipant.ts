@@ -863,7 +863,7 @@ export function buildReviewDiffArgs(
     sourceRef?: string,
 ): string[] {
     return sourceRef
-        ? ['diff', targetRef, sourceRef, '--', ...filePaths]
+        ? ['diff', '--merge-base', targetRef, sourceRef, '--', ...filePaths]
         : mode
             ? buildGitDiffArgs(mode, targetRef, currentBranchRef, filePaths)
             : (filePaths.length > 0

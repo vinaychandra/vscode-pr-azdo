@@ -30,7 +30,7 @@ suite('buildReviewDiffArgs', () => {
     test('uses immutable target and source refs for snapshot reviews', () => {
         assert.deepStrictEqual(
             buildReviewDiffArgs('target-sha', ['src/a.ts', 'README.md'], 'vs-target', 'origin/local', 'source-sha'),
-            ['diff', 'target-sha', 'source-sha', '--', 'src/a.ts', 'README.md'],
+            ['diff', '--merge-base', 'target-sha', 'source-sha', '--', 'src/a.ts', 'README.md'],
         );
     });
 });

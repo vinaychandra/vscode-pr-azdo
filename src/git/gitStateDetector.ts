@@ -8,7 +8,7 @@ export type ReviewMode =
     | 'unstaged'          // git diff  (working tree vs index)
     | 'all-uncommitted'   // git diff HEAD  (working tree vs last commit)
     | 'unpushed-commits'  // git diff origin/<current>..HEAD
-    | 'vs-target';        // git diff origin/<target> [-- files]  (today's default)
+    | 'vs-target';        // git diff --merge-base origin/<target> [-- files]
 
 /** Snapshot of the git working tree / branch state. */
 export interface GitWorkspaceState {
@@ -117,8 +117,8 @@ export function getReviewOptions(
         });
         items.push({
             label: '$(git-compare) Review all changes vs remote target',
-            description: `diff origin/${targetBranch}`,
-            detail: `Compare current state against origin/${targetBranch}`,
+            description: `diff --merge-base origin/${targetBranch}`,
+            detail: `Review changes introduced since the branch diverged from origin/${targetBranch}`,
             reviewMode: 'vs-target',
         });
         return items;
@@ -165,8 +165,8 @@ export function getReviewOptions(
 
     items.push({
         label: '$(git-compare) Review everything vs remote target',
-        description: `diff origin/${targetBranch}`,
-        detail: `Compare entire working tree against origin/${targetBranch}`,
+        description: `diff --merge-base origin/${targetBranch}`,
+        detail: `Review committed and working-tree changes introduced since the branch diverged from origin/${targetBranch}`,
         reviewMode: 'vs-target',
     });
 
@@ -193,8 +193,8 @@ export function buildGitDiffArgs(
             return ['diff', `${currentBranchRef ?? 'origin/HEAD'}..HEAD`];
         case 'vs-target':
             return filePaths.length > 0
-                ? ['diff', targetRef, '--', ...filePaths]
-                : ['diff', targetRef];
+                ? ['diff', '--merge-base', targetRef, '--', ...filePaths]
+                : ['diff', '--merge-base', targetRef];
     }
 }
 

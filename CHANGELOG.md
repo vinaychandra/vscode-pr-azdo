@@ -6,6 +6,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Fixed
+
+- **AI reviews no longer flag target-only changes as regressions** — `vs-target` reviews now diff from the source and target merge base, so updates made only on the target branch are not presented to Copilot as reversals introduced by the pull request.
+
 ## [0.0.13]
 
 ### Added
