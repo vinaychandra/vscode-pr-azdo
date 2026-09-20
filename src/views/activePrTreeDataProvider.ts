@@ -603,6 +603,17 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                     iterationId: this._reviewContext.iterationId ?? latestIteration.id,
                     compareToIterationId: this._reviewContext.compareToIterationId ?? 0,
                 };
+            } else if (this._reviewContext?.mode === 'workingTree'
+                && latestIteration?.id
+                && latestIteration.commonRefCommit?.commitId) {
+                this._reviewContext = {
+                    ...this._reviewContext,
+                    targetRef: latestIteration.commonRefCommit.commitId,
+                    latestIterationId: latestIteration.id,
+                    iterationId: latestIteration.id,
+                    compareToIterationId: 0,
+                    checkoutBacked: true,
+                };
             }
 
             const selectedIterationId = this._reviewContext?.iterationId ?? latestIteration?.id;

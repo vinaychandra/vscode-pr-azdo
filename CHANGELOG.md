@@ -18,6 +18,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **Comments in repository-free reviews** — existing threads now appear inline on virtual diff documents, and the editor gutter exposes the control for adding new comments without requiring a workspace root.
 - **Comments appear immediately in blank-window reviews** — opening a pull request URL now applies the persisted Review Mode state to the newly created provider, so comments no longer require disabling and re-enabling review first.
 - **Unsupported AI actions in no-checkout reviews** — Review with Copilot, Resolve with Copilot, Apply Suggestion, and direct `/review`, `/review-quick`, and `/fix` chat commands now report that a checkout is required. Read-only `/explain` remains available, and iteration reviews started from a standard checkout or review worktree retain AI support.
+- **Consistent diffs across review modes** — standard checkouts and review worktrees now promote file diffs to immutable Azure DevOps source/common-base snapshots, matching no-checkout and repository-free reviews even when local source or target refs are stale.
 
 ## [0.0.15]
 

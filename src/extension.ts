@@ -599,6 +599,29 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	async function ensureImmutablePrDiff(): Promise<boolean> {
+		const provider = activePrProvider;
+		const pr = provider?._activePrForContext;
+		if (!provider || !pr?.pullRequestId) { return false; }
+		if (provider.reviewContext?.mode === 'snapshot') { return true; }
+
+		const reviewApiClient = getReviewApiClient();
+		const reviewPrService = getReviewPrService();
+		const reviewRemoteInfo = getReviewRemoteInfo();
+		if (!reviewApiClient || !reviewPrService || !reviewRemoteInfo) { return false; }
+		return pinApiPullRequestSnapshot(
+			pr,
+			pr.pullRequestId,
+			reviewApiClient,
+			reviewPrService,
+			reviewRemoteInfo,
+			undefined,
+			0,
+			false,
+			true,
+		);
+	}
+
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.selectIteration', async () => {
 			const pinned = pinnedSnapshotReview;
@@ -1193,7 +1216,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			const cursorLine = editor.selection.active.line;
 			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
 			const sourceBranch = pr.sourceRefName?.replace(/^refs\/heads\//, '');
-			const reviewContext = activePrProvider?.reviewContext;
+			let reviewContext = activePrProvider?.reviewContext;
 			const targetRef = reviewContext?.targetRef ?? `origin/${targetBranch}`;
 			const sourceRef = reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined;
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
@@ -1254,6 +1277,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				e.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
 				outputChannel.appendLine(`[toggle] Opened workspace file for ${relative}.`);
 			} else if (uri.scheme === 'file') {
+				if (reviewContext?.mode !== 'snapshot') {
+					const ready = await ensureImmutablePrDiff();
+					if (!ready) {
+						vscode.window.showErrorMessage('Unable to load the server pull request snapshot for this diff.');
+						return;
+					}
+					reviewContext = activePrProvider?.reviewContext;
+				}
 				// File → Diff: compute relative path, look up change type, open diff
 				const relative = repoRoot ? computeRelativePath(uri, repoRoot) : undefined;
 				if (!relative) {
@@ -1262,7 +1293,15 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 
 				const changeType = activePrProvider?.getChangeType(relative) ?? VersionControlChangeType.Edit;
-				const diff = buildDiffParams(relative, changeType, repoRoot!, targetRef, targetBranch, sourceRef, sourceBranch);
+				const diff = buildDiffParams(
+					relative,
+					changeType,
+					repoRoot!,
+					reviewContext?.targetRef ?? targetRef,
+					targetBranch,
+					reviewContext?.sourceRef,
+					sourceBranch,
+				);
 
 				outputChannel.appendLine(`[toggle] File → Diff for ${relative}`);
 				await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
@@ -2415,6 +2454,14 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!pr) {
 				vscode.window.showWarningMessage('No active pull request.');
 				return;
+			}
+
+			if (activePrProvider?.reviewContext?.mode !== 'snapshot') {
+				const ready = await ensureImmutablePrDiff();
+				if (!ready) {
+					vscode.window.showErrorMessage('Unable to load the server pull request snapshot for this diff.');
+					return;
+				}
 			}
 
 			const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';

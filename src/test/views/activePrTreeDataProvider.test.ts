@@ -1308,6 +1308,38 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         harness.dispose();
     });
 
+    test('uses the Azure common commit as the checkout diff base', async () => {
+        const pr = {
+            pullRequestId: 42,
+            title: 'Checkout review',
+            sourceRefName: 'refs/heads/feature',
+            targetRefName: 'refs/heads/main',
+        } as GitPullRequest;
+        const service = createMockPrService({
+            findPrForBranch: async () => pr,
+            getPrIterations: async () => [{
+                id: 3,
+                sourceRefCommit: { commitId: 'server-source' },
+                targetRefCommit: { commitId: 'server-target' },
+                commonRefCommit: { commitId: 'azure-common-base' },
+            }] as any,
+            getPrIterationChanges: async () => ({ changeEntries: [] }),
+        });
+        const harness = makeMutableGitApi('feature', 'server-source');
+        const provider = new ActivePrTreeDataProvider(service, harness.api, createMockLog());
+        await provider.detectActivePr();
+
+        const root = (await provider.getChildren()).find(item => item instanceof ActivePrRootItem)!;
+        await provider.getChildren(root);
+
+        assert.strictEqual(provider.reviewContext?.mode, 'workingTree');
+        assert.strictEqual(provider.reviewContext?.targetRef, 'azure-common-base');
+        assert.strictEqual(provider.reviewContext?.sourceRef, undefined);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
     test('loads snapshot files relative to the selected iteration', async () => {
         const changeCalls: unknown[][] = [];
         const snapshotService = createMockPrService({

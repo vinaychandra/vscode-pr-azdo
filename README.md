@@ -39,6 +39,8 @@ You can also run **Review Pull Request from URL** without opening a folder or cl
 
 For any active pull request, including a standard checkout or review worktree, select **Show Iterations** directly below the Review Mode toggle to choose one or more updates. Iterations are ordered newest first, with **Base** shown last as the common commit between the source and target branches. Selecting iteration 3 alone compares iteration 3 with iteration 2; selecting iterations 2 through 4 compares iteration 4 with iteration 1. If selected iterations contain gaps, the intermediate iterations are included automatically; selecting none falls back to the latest iteration. The Files tree, the currently open diff, and new comment metadata all follow the selected range. Iteration diffs use immutable Azure DevOps content and do not modify the current checkout or worktree.
 
+File diffs are server-authoritative in every review mode. Opening a diff from a standard checkout or review worktree loads the pull request's immutable source and common-base revisions through Azure DevOps, so an outdated local `main`/`master`, remote-tracking branch, or PR branch does not alter the displayed review. The checkout remains unchanged and available for supported AI and fix actions.
+
 ### Inline Comments
 
 - Comments appear as inline annotations on the exact lines they reference
