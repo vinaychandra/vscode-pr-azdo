@@ -763,7 +763,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         const filtered = this.applyThreadFilter(this._allThreads);
         return filtered
             .filter(t => !t.threadContext?.filePath)
-            .map(t => new CommentThreadItem(t));
+            .map(t => new CommentThreadItem(t, this._iterations?.length ?? 0));
     }
 
     /** Get filtered comments for a specific file. */
@@ -791,7 +791,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 const threads = byFile.get(node.filePath);
                 if (threads) {
                     for (const t of threads) {
-                        node.commentThreads.push(new CommentThreadItem(t));
+                        node.commentThreads.push(new CommentThreadItem(t, this._iterations?.length ?? 0));
                     }
                     node.finalizeComments();
                 }

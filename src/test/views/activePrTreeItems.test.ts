@@ -418,6 +418,25 @@ suite('CommentThreadItem', () => {
         assert.strictEqual(item.description, 'Alice');
     });
 
+    test('shows the originating iteration when the PR has multiple iterations', () => {
+        const item = new CommentThreadItem(makeThread({
+            pullRequestThreadContext: {
+                iterationContext: { firstComparingIteration: 1, secondComparingIteration: 3 },
+            },
+        }), 4);
+        assert.strictEqual(item.description, 'Alice · Iteration 3');
+        assert.ok((item.tooltip as vscode.MarkdownString).value.includes('Iteration 3'));
+    });
+
+    test('hides the iteration when the PR has only one iteration', () => {
+        const item = new CommentThreadItem(makeThread({
+            pullRequestThreadContext: {
+                iterationContext: { firstComparingIteration: 1, secondComparingIteration: 1 },
+            },
+        }), 1);
+        assert.strictEqual(item.description, 'Alice');
+    });
+
     test('truncates long content at 80 chars', () => {
         const longContent = 'A'.repeat(100);
         const item = new CommentThreadItem(makeThread({

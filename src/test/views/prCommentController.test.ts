@@ -435,6 +435,32 @@ suite('PrCommentController', () => {
         controller.dispose();
     });
 
+    test('inline comments show iteration only when multiple iterations exist', async () => {
+        const controller = new PrCommentController(createMockLog());
+        const thread = makeThread({
+            pullRequestThreadContext: {
+                iterationContext: { firstComparingIteration: 1, secondComparingIteration: 3 },
+            },
+        });
+        const uri = vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///src/index.ts?ref=source-sha`);
+        const range = new vscode.Range(9, 0, 9, 0);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined, undefined,
+            'target-sha', 'source-sha', 42, undefined, 3, 1, 4,
+        );
+
+        const comments = await controller.buildCommentsForUri(thread, uri, range);
+        assert.strictEqual(comments[0].label, 'Iteration 3');
+
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined, undefined,
+            'target-sha', 'source-sha', 42, undefined, 1, 0, 1,
+        );
+        const singleIterationComments = await controller.buildCommentsForUri(thread, uri, range);
+        assert.strictEqual(singleIterationComments[0].label, undefined);
+        controller.dispose();
+    });
+
     // --- createThreadOnUri ---
 
     test('createThreadOnUri creates a read-only thread', () => {
@@ -1678,6 +1704,7 @@ suite('Deleted files: posting new comments', () => {
             new Map([['src/index.ts', 17]]),
             5,
             2,
+            4,
         );
         const uri = vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///src/index.ts?ref=head-source`);
         const tempThread = vscode.comments.createCommentController('test-iteration', 'Test').createCommentThread(
@@ -1692,6 +1719,7 @@ suite('Deleted files: posting new comments', () => {
         assert.strictEqual(capturedArgs![3], 17);
         assert.strictEqual(capturedArgs![4], 5);
         assert.strictEqual(capturedArgs![5], 2);
+        assert.strictEqual(tempThread.comments[0].label, 'Iteration 5');
 
         tempThread.dispose();
         controller.dispose();

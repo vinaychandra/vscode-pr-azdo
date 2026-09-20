@@ -764,6 +764,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						activePrProvider?.changeTrackingIds,
 						reviewContext?.iterationId,
 						reviewContext?.compareToIterationId,
+						activePrProvider?.iterations?.length ?? 0,
 				);
 				await commentController.updateThreads(activePrProvider?.filteredThreads);
 				if (pr?.pullRequestId !== activePrProvider?._activePrForContext?.pullRequestId) { return; }

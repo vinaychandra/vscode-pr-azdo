@@ -8,6 +8,7 @@ import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
 import { computeRelativePath, extractPathFromGitRefUri } from './toggleFileDiffHelpers';
+import { getThreadIterationLabel } from './activePrTreeItems';
 
 /** URI scheme for the virtual PR-level comments document. */
 export const PR_COMMENTS_SCHEME = 'azdo-pr-comments';
@@ -54,6 +55,7 @@ export class PrCommentController implements vscode.Disposable {
     private _changeTrackingIds = new Map<string, number>();
     private _iterationId: number | undefined;
     private _compareToIterationId: number | undefined;
+    private _iterationCount = 0;
 
     /** Git ref for the target branch (e.g. 'origin/main'); used to anchor comments on deleted files. */
     private _targetRef: string | undefined;
@@ -160,6 +162,7 @@ export class PrCommentController implements vscode.Disposable {
         changeTrackingIds?: ReadonlyMap<string, number>,
         iterationId?: number,
         compareToIterationId?: number,
+        iterationCount = 0,
     ): void {
         if (draftScope !== this._draftScope) {
             this.cacheRenderedDrafts();
@@ -174,6 +177,7 @@ export class PrCommentController implements vscode.Disposable {
         this._changeTrackingIds = changeTrackingIds ? new Map(changeTrackingIds) : new Map();
         this._iterationId = iterationId;
         this._compareToIterationId = compareToIterationId;
+        this._iterationCount = iterationCount;
         this._targetRef = targetRef;
         this._sourceRef = sourceRef;
         this.log.appendLine(`[comments] setPrContext: prId=${prId}, draftScope=${draftScope ?? '(none)'}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}, sourceRef=${sourceRef ?? '(working tree)'}`);
@@ -243,7 +247,8 @@ export class PrCommentController implements vscode.Disposable {
             return;
         }
 
-        const threadId = this._threadMetaMap.get(reply.thread)?.id;
+        const threadMeta = this._threadMetaMap.get(reply.thread);
+        const threadId = threadMeta?.id;
         if (!threadId) {
             vscode.window.showWarningMessage('Cannot identify thread to reply to.');
             return;
@@ -258,6 +263,7 @@ export class PrCommentController implements vscode.Disposable {
                 mode: vscode.CommentMode.Preview,
                 author: { name: created.author?.displayName ?? 'You' },
                 timestamp: created.publishedDate ? new Date(created.publishedDate) : new Date(),
+                label: threadMeta ? getThreadIterationLabel(threadMeta.azdoThread, this._iterationCount) : undefined,
             }];
             reply.thread.comments = newComments;
             this.log.appendLine(`[comments] Reply created successfully.`);
@@ -318,6 +324,9 @@ export class PrCommentController implements vscode.Disposable {
                 mode: vscode.CommentMode.Preview,
                 author: { name: created.comments?.[0]?.author?.displayName ?? 'You' },
                 timestamp: new Date(),
+                label: this._iterationCount > 1 && this._iterationId
+                    ? `Iteration ${this._iterationId}`
+                    : undefined,
             }];
             reply.thread.canReply = true;
             reply.thread.label = 'Active';
@@ -609,6 +618,7 @@ export class PrCommentController implements vscode.Disposable {
                         author: { name: c.author?.displayName ?? 'Unknown' },
                         contextValue: (this._currentUserId && c.author?.id === this._currentUserId) ? 'ownComment' : undefined,
                         timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+                        label: getThreadIterationLabel(azdoThread, this._iterationCount),
                     } as vscode.Comment));
                 if (comments.length === 0) { continue; }
 
@@ -790,6 +800,7 @@ export class PrCommentController implements vscode.Disposable {
         return comments.map(c => {
             const content = c.content ?? '';
             const isOwnComment = !!(this._currentUserId && c.author?.id === this._currentUserId);
+            const iterationLabel = getThreadIterationLabel(thread, this._iterationCount);
             this.log.appendLine(`[comments]   comment by ${c.author?.displayName} (id=${c.author?.id}), currentUser=${this._currentUserId}, isOwn=${isOwnComment}`);
 
             if (hasSuggestion(content) && originalLines) {
@@ -808,6 +819,7 @@ export class PrCommentController implements vscode.Disposable {
                     author: { name: c.author?.displayName ?? 'Unknown' },
                     contextValue: isOwnComment ? 'ownComment' : undefined,
                     timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+                    label: iterationLabel,
                 } as vscode.Comment;
             }
 
@@ -817,6 +829,7 @@ export class PrCommentController implements vscode.Disposable {
                 author: { name: c.author?.displayName ?? 'Unknown' },
                 contextValue: isOwnComment ? 'ownComment' : undefined,
                 timestamp: c.publishedDate ? new Date(c.publishedDate) : undefined,
+                label: iterationLabel,
             } as vscode.Comment;
         });
     }
