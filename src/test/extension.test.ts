@@ -19,5 +19,9 @@ suite('Extension Test Suite', () => {
 		await extension.activate();
 		const commands = await vscode.commands.getCommands(true);
 		assert.ok(commands.includes('vscode-pr-azdo.reviewPullRequestFromUrl'));
+		const contribution = extension.packageJSON.contributes.commands.find(
+			(command: { command: string }) => command.command === 'vscode-pr-azdo.reviewPullRequestFromUrl',
+		);
+		assert.strictEqual(contribution?.title, 'Azure DevOps PR: Review Pull Request from URL');
 	});
 });

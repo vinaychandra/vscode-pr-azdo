@@ -124,7 +124,7 @@
       },
       {
         "command": "vscode-pr-azdo.reviewPullRequestFromUrl",
-        "title": "Review Pull Request from URL",
+        "title": "Azure DevOps PR: Review Pull Request from URL",
         "icon": "$(link-external)"
       },
       {
