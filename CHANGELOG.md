@@ -9,7 +9,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Added
 
 - **Repository-free URL reviews** — open pull requests from an empty VS Code window without cloning or checking out the repository. Changed paths and revisions are resolved in one Azure DevOps batch request, then their unique blobs are downloaded in one ZIP request.
-- **Iteration-focused reviews** — no-checkout reviews now include a **Show Iterations** action below the Review Mode toggle. Select one or more iterations, ordered latest to first with the Azure DevOps common base shown last; gaps are included automatically, open diffs refresh to the selected range, and comment metadata follows the same comparison.
+- **Iteration-focused reviews** — every active pull request, including standard checkouts and review worktrees, now includes a **Show Iterations** action below the Review Mode toggle. Select one or more iterations, ordered latest to first with the Azure DevOps common base shown last; gaps are included automatically, open diffs refresh to the selected range, and comment metadata follows the same comparison without modifying the checkout.
 
 ### Fixed
 

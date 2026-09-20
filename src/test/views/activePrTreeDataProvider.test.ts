@@ -378,8 +378,9 @@ suite('ActivePrTreeDataProvider — auth lifecycle', () => {
         assert.ok(findCalled, 'findPrForBranch should be called once connected');
 
         roots = await provider.getChildren();
-        assert.strictEqual(roots.length, 2); // ReviewModeToggleItem + ActivePrRootItem
-        assert.ok(roots[1] instanceof ActivePrRootItem);
+        assert.strictEqual(roots.length, 3); // ReviewModeToggleItem + IterationSelectorItem + ActivePrRootItem
+        assert.ok(roots[1] instanceof IterationSelectorItem);
+        assert.ok(roots[2] instanceof ActivePrRootItem);
 
         // 3. Token expires — simulate disconnect
         (svc as any).isConnected = false;
@@ -399,8 +400,8 @@ suite('ActivePrTreeDataProvider — auth lifecycle', () => {
         (svc as any).isConnected = true;
         await provider.detectActivePr();
         roots = await provider.getChildren();
-        assert.strictEqual(roots.length, 2);
-        assert.ok(roots[1] instanceof ActivePrRootItem);
+        assert.strictEqual(roots.length, 3);
+        assert.ok(roots[2] instanceof ActivePrRootItem);
 
         provider.dispose();
     });
@@ -415,7 +416,7 @@ suite('ActivePrTreeDataProvider — auth lifecycle', () => {
         );
         await provider.detectActivePr();
         let roots = await provider.getChildren();
-        assert.strictEqual(roots.length, 2);
+        assert.strictEqual(roots.length, 3);
 
         // Simulate: token expired but silent re-auth succeeded (isConnected stays true)
         // In the real flow, handleAuthError calls tryConnectSilently which succeeds,
@@ -423,8 +424,8 @@ suite('ActivePrTreeDataProvider — auth lifecycle', () => {
         provider.refresh();
         await provider.detectActivePr();
         roots = await provider.getChildren();
-        assert.strictEqual(roots.length, 2, 'Should still show PR tree after silent re-auth');
-        assert.ok(roots[1] instanceof ActivePrRootItem);
+        assert.strictEqual(roots.length, 3, 'Should still show PR tree after silent re-auth');
+        assert.ok(roots[2] instanceof ActivePrRootItem);
 
         provider.dispose();
     });
@@ -439,8 +440,8 @@ suite('ActivePrTreeDataProvider — auth lifecycle', () => {
         );
         await provider.detectActivePr();
         let roots = await provider.getChildren();
-        assert.strictEqual(roots.length, 2);
-        assert.ok(roots[1] instanceof ActivePrRootItem);
+        assert.strictEqual(roots.length, 3);
+        assert.ok(roots[2] instanceof ActivePrRootItem);
 
         // Simulate: token expired and silent re-auth also failed
         // handleAuthError would call resetConnection → isConnected = false,

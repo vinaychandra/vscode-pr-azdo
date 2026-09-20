@@ -150,6 +150,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		externalApiClient?: AzDoApiClient;
 		externalPrService?: PullRequestService;
 		externalRemoteInfo?: ParsedAzDoRemote;
+		ownsApiClient?: boolean;
 	}
 	let pinnedSnapshotReview: PinnedSnapshotReview | undefined;
 
@@ -170,7 +171,11 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	context.subscriptions.push({
-		dispose: () => pinnedSnapshotReview?.externalApiClient?.dispose(),
+		dispose: () => {
+			if (pinnedSnapshotReview?.ownsApiClient) {
+				pinnedSnapshotReview.externalApiClient?.dispose();
+			}
+		},
 	});
 
 	// Inline comment controller — lives for the extension's lifetime
@@ -388,7 +393,9 @@ export async function activate(context: vscode.ExtensionContext) {
 					throw new Error('The selected iteration range does not include a comparison commit.');
 				}
 			}
-			const previousExternalClient = pinnedSnapshotReview?.externalApiClient;
+			const previousExternalClient = pinnedSnapshotReview?.ownsApiClient
+				? pinnedSnapshotReview.externalApiClient
+				: undefined;
 			pinnedSnapshotReview = {
 				pr,
 				sourceRef: sourceCommit,
@@ -403,6 +410,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				externalApiClient: external?.apiClient,
 				externalPrService: external?.prService,
 				externalRemoteInfo: external?.remoteInfo,
+				ownsApiClient: !!external,
 			};
 			if (previousExternalClient && previousExternalClient !== external?.apiClient) {
 				previousExternalClient.dispose();
@@ -438,12 +446,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	async function pinApiPullRequestSnapshot(
 		pr: GitPullRequest,
-		reviewScope: string,
+		reviewScope: number | string,
 		externalApiClient: AzDoApiClient,
 		externalPrService: PullRequestService,
 		externalRemoteInfo: ParsedAzDoRemote,
 		iterationId?: number,
 		compareToIterationId = 0,
+		ownsApiClient = false,
 	): Promise<boolean> {
 		if (!pr.pullRequestId) {
 			vscode.window.showWarningMessage('Pull request information is unavailable.');
@@ -455,7 +464,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				{ location: vscode.ProgressLocation.Notification, title: `Loading PR #${pr.pullRequestId} content…` },
 				() => externalPrService.getApiReviewSnapshot(pr.pullRequestId!, iterationId, compareToIterationId),
 			);
-			const previousExternalClient = pinnedSnapshotReview?.externalApiClient;
+			const previousExternalClient = pinnedSnapshotReview?.ownsApiClient
+				? pinnedSnapshotReview.externalApiClient
+				: undefined;
 			pinnedSnapshotReview = {
 				pr,
 				sourceRef: snapshot.sourceCommit,
@@ -468,6 +479,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				externalApiClient,
 				externalPrService,
 				externalRemoteInfo,
+				ownsApiClient,
 			};
 			if (previousExternalClient && previousExternalClient !== externalApiClient) {
 				previousExternalClient.dispose();
@@ -514,7 +526,9 @@ export async function activate(context: vscode.ExtensionContext) {
 		pinnedSnapshotReview = undefined;
 		gitContentProvider.setApiContents(undefined);
 		activePrProvider?.stopSnapshotReview(prService);
-		stoppedReview.externalApiClient?.dispose();
+		if (stoppedReview.ownsApiClient) {
+			stoppedReview.externalApiClient?.dispose();
+		}
 	}
 
 	context.subscriptions.push(
@@ -576,8 +590,12 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.selectIteration', async () => {
 			const pinned = pinnedSnapshotReview;
 			const provider = activePrProvider;
-			if (!pinned || !provider?.isSnapshotReview) {
-				vscode.window.showInformationMessage('Iteration comparison is available during a no-checkout review.');
+			const pr = provider?._activePrForContext;
+			const reviewApiClient = getReviewApiClient();
+			const reviewPrService = getReviewPrService();
+			const reviewRemoteInfo = getReviewRemoteInfo();
+			if (!provider || !pr || !pr.pullRequestId || !reviewApiClient || !reviewPrService || !reviewRemoteInfo) {
+				vscode.window.showInformationMessage('Iteration comparison requires an active pull request.');
 				return;
 			}
 			const originalTab = vscode.window.tabGroups.activeTabGroup.activeTab;
@@ -596,8 +614,8 @@ export async function activate(context: vscode.ExtensionContext) {
 				const availableIterationIds = iterations.flatMap(iteration => iteration.id ? [iteration.id] : []);
 				const pickedIds = new Set(selectedIterationIds(
 					availableIterationIds,
-					pinned.iterationId ?? head.id,
-					pinned.compareToIterationId ?? 0,
+					pinned?.iterationId ?? provider.reviewContext?.iterationId ?? head.id,
+					pinned?.compareToIterationId ?? provider.reviewContext?.compareToIterationId ?? 0,
 				));
 				const items: IterationPick[] = iterationSelectionEntries(availableIterationIds).map(entry => {
 						if (entry.kind === 'base') {
@@ -617,7 +635,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						};
 				});
 				const selected = await vscode.window.showQuickPick(items, {
-					title: `PR #${pinned.pr.pullRequestId}: Show Iterations`,
+					title: `PR #${pr.pullRequestId}: Show Iterations`,
 					placeHolder: 'Select iterations; gaps are included automatically',
 					canPickMany: true,
 				});
@@ -628,54 +646,23 @@ export async function activate(context: vscode.ExtensionContext) {
 				);
 				if (!range) { return; }
 
-				if (range.iterationId === pinned.iterationId
+				if (pinned
+					&& range.iterationId === pinned.iterationId
 					&& range.compareToIterationId === (pinned.compareToIterationId ?? 0)) { return; }
 
-				if (pinned.apiBacked && pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo && typeof pinned.reviewScope === 'string') {
-					const opened = await pinApiPullRequestSnapshot(
-						pinned.pr,
-						pinned.reviewScope,
-						pinned.externalApiClient,
-						pinned.externalPrService,
-						pinned.externalRemoteInfo,
-						range.iterationId,
-						range.compareToIterationId,
-					);
-					if (opened) {
-						await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
-					}
-					return;
-				}
-
-				const selectedIteration = iterations.find(iteration => iteration.id === range.iterationId);
-				const comparisonIteration = range.compareToIterationId === 0
-					? undefined
-					: iterations.find(iteration => iteration.id === range.compareToIterationId);
-				const sourceCommit = selectedIteration?.sourceRefCommit?.commitId;
-				const comparisonCommit = comparisonIteration?.sourceRefCommit?.commitId
-					?? selectedIteration?.commonRefCommit?.commitId;
-				if (!sourceCommit || !comparisonCommit) {
-					vscode.window.showWarningMessage('The selected iteration does not include a comparison commit.');
-					return;
-				}
-				pinned.sourceRef = sourceCommit;
-				pinned.targetRef = comparisonCommit;
-				pinned.latestIterationId = head.id;
-				pinned.iterationId = range.iterationId;
-				pinned.compareToIterationId = range.compareToIterationId;
-				gitContentProvider.setApiContents(undefined);
-				provider.pinSnapshotReview(
-					pinned.pr,
-					pinned.sourceRef,
-					pinned.targetRef,
-					pinned.externalPrService ?? prService,
-					{
-						latestIterationId: head.id,
-						iterationId: range.iterationId,
-						compareToIterationId: range.compareToIterationId,
-					},
+				const opened = await pinApiPullRequestSnapshot(
+					pr,
+					pinned?.reviewScope ?? pr.pullRequestId,
+					reviewApiClient,
+					reviewPrService,
+					reviewRemoteInfo,
+					range.iterationId,
+					range.compareToIterationId,
+					pinned?.ownsApiClient ?? false,
 				);
-				await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
+				if (opened) {
+					await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
+				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				outputChannel.appendLine(`[iterations] Failed to select comparison: ${msg}`);
@@ -1098,7 +1085,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			suppressAutoExpand = false;
 			if (pinnedSnapshotReview) {
 				const pinned = pinnedSnapshotReview;
-				if (pinned.apiBacked && pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo && typeof pinned.reviewScope === 'string') {
+				if (pinned.apiBacked && pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo) {
 					await pinApiPullRequestSnapshot(
 						pinned.pr,
 						pinned.reviewScope,
@@ -1107,6 +1094,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						pinned.externalRemoteInfo,
 						pinned.iterationId,
 						pinned.compareToIterationId ?? 0,
+						pinned.ownsApiClient ?? false,
 					);
 					return;
 				}
@@ -2385,6 +2373,9 @@ export async function activate(context: vscode.ExtensionContext) {
 						externalApiClient,
 						externalPrService,
 						externalRemoteInfo,
+						undefined,
+						0,
+						true,
 					);
 					if (!opened) {
 						externalApiClient.dispose();

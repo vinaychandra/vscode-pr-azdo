@@ -514,7 +514,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             const roots: ActivePrTreeItem[] = [
                 new ReviewModeToggleItem(this._reviewMode, this._allThreads?.length ?? 0),
             ];
-            if (this.isSnapshotReview) {
+            if (this._activePr.pullRequestId) {
                 const iterationId = this._reviewContext?.iterationId;
                 const compareToIterationId = this._reviewContext?.compareToIterationId;
                 const latestIterationId = this._reviewContext?.latestIterationId;
