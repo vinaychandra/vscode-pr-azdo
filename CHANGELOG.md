@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.16]
+
 ### Added
 
 - **Repository-free URL reviews** — open pull requests from an empty VS Code window without cloning or checking out the repository. Changed paths and revisions are resolved in one Azure DevOps batch request, then their unique blobs are downloaded in one ZIP request.
