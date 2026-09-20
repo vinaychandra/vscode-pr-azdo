@@ -308,6 +308,16 @@ suite('buildHtml', () => {
         assert.ok(html.includes('&lt;script&gt;'));
     });
 
+    test('renders Markdown in the full description', () => {
+        const html = buildHtml(makePr({
+            description: '# Overview\n\nThis is **important**.\n\n- First\n- Second',
+        }), remoteInfo);
+        assert.ok(html.includes('<h1>Overview</h1>'));
+        assert.ok(html.includes('<strong>important</strong>'));
+        assert.ok(html.includes('<li>First</li>'));
+        assert.ok(html.includes('<li>Second</li>'));
+    });
+
     test('contains Content-Security-Policy', () => {
         const html = buildHtml(makePr(), remoteInfo);
         assert.ok(html.includes('Content-Security-Policy'));

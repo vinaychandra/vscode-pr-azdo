@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
+import MarkdownIt = require('markdown-it');
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestAsyncStatus, PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from '../azdo/apiClient';
 import type { ParsedAzDoRemote } from '../azdo/remoteInfo';
+
+const markdown = new MarkdownIt({ html: false, linkify: true });
 
 /** Messages sent from webview → extension. */
 interface WebviewMessage {
@@ -178,7 +181,7 @@ export function buildHtml(pr: GitPullRequest, remoteInfo: ParsedAzDoRemote): str
     const shortRef = (r: string | undefined) => r?.replace(/^refs\/heads\//, '') ?? '';
     const created = pr.creationDate ? new Date(pr.creationDate).toLocaleString() : 'unknown';
     const closed = pr.closedDate ? new Date(pr.closedDate).toLocaleString() : null;
-    const description = escapeHtml(pr.description ?? 'No description provided.');
+    const description = markdown.render(pr.description ?? 'No description provided.');
     const webUrl = buildPrWebUrl(remoteInfo, pr.pullRequestId!);
 
     // Status badges
@@ -256,7 +259,11 @@ export function buildHtml(pr: GitPullRequest, remoteInfo: ParsedAzDoRemote): str
   .badge-abandoned { background: #6e7681; color: #fff; }
   .badge-required { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.75em; }
   .label { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); margin-right: 4px; }
-  .description { white-space: pre-wrap; margin: 16px 0; padding: 12px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border); }
+    .description { margin: 16px 0; padding: 12px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border); overflow-wrap: anywhere; }
+    .description > :first-child { margin-top: 0; }
+    .description > :last-child { margin-bottom: 0; }
+    .description a { color: var(--vscode-textLink-foreground); }
+    .description pre { overflow: auto; padding: 8px; background: var(--vscode-textCodeBlock-background); }
   table { border-collapse: collapse; margin-top: 8px; width: 100%; }
   th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--vscode-widget-border, #333); }
   th { color: var(--vscode-descriptionForeground); }

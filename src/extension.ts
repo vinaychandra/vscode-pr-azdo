@@ -2364,15 +2364,23 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Open PR detail webview
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', (pr: GitPullRequest) => {
+		vscode.commands.registerCommand('vscode-pr-azdo.openPullRequest', async (pr: GitPullRequest) => {
 		const isPinnedPr = pinnedSnapshotReview?.pr === pr;
 		const activeApiClient = isPinnedPr ? getReviewApiClient() : apiClient;
+		const activePrService = isPinnedPr ? getReviewPrService() : prService;
 		const activeRemoteInfo = isPinnedPr ? getReviewRemoteInfo() : detector.currentRemoteInfo;
-			if (!activeApiClient || !activeRemoteInfo) {
+			if (!activeApiClient || !activePrService || !activeRemoteInfo || !pr.pullRequestId) {
 				vscode.window.showWarningMessage('Not connected to Azure DevOps.');
 				return;
 			}
-			PrDetailPanel.createOrShow(pr, context.extensionUri, activeApiClient, activeRemoteInfo, outputChannel);
+			try {
+				const fullPr = await activePrService.getPullRequest(pr.pullRequestId);
+				PrDetailPanel.createOrShow(fullPr, context.extensionUri, activeApiClient, activeRemoteInfo, outputChannel);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[detail] Failed to load full PR #${pr.pullRequestId}: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to load pull request summary: ${msg}`);
+			}
 		}),
 	);
 
