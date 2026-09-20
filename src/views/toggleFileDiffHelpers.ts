@@ -38,6 +38,20 @@ export function getWorkspaceFileUriFromDiffInput(input: unknown): vscode.Uri | u
     return input.original.scheme === 'file' ? input.original : undefined;
 }
 
+/** Return the PR-relative path represented by a virtual snapshot diff. */
+export function getSnapshotPathFromDiffInput(input: unknown): string | undefined {
+    if (!(input instanceof vscode.TabInputTextDiff)) {
+        return undefined;
+    }
+    if (input.modified.scheme === GIT_CONTENT_SCHEME) {
+        const modifiedPath = extractPathFromGitRefUri(input.modified);
+        if (modifiedPath) { return modifiedPath; }
+    }
+    return input.original.scheme === GIT_CONTENT_SCHEME
+        ? extractPathFromGitRefUri(input.original)
+        : undefined;
+}
+
 /**
  * Check if a URI (file or git-ref scheme) belongs to a set of changed file paths.
  */

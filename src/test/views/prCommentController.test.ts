@@ -1653,4 +1653,48 @@ suite('Deleted files: posting new comments', () => {
         controller.dispose();
         detector.dispose();
     });
+
+    test('new snapshot comments forward selected iteration metadata', async () => {
+        let capturedArgs: unknown[] | undefined;
+        const mockPrService = {
+            createThread: async (...args: unknown[]) => {
+                capturedArgs = args;
+                return { id: 1001, comments: [] };
+            },
+        };
+        const api = makeGitApi([]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            mockPrService as any,
+            42,
+            ['src/index.ts'],
+            undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            'iteration-source',
+            'head-source',
+            42,
+            new Map([['src/index.ts', 17]]),
+            5,
+            2,
+        );
+        const uri = vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///src/index.ts?ref=head-source`);
+        const tempThread = vscode.comments.createCommentController('test-iteration', 'Test').createCommentThread(
+            uri,
+            new vscode.Range(3, 0, 3, 4),
+            [],
+        );
+
+        await controller.handleNewComment({ thread: tempThread, text: 'Iteration comment' });
+
+        assert.ok(capturedArgs);
+        assert.strictEqual(capturedArgs![3], 17);
+        assert.strictEqual(capturedArgs![4], 5);
+        assert.strictEqual(capturedArgs![5], 2);
+
+        tempThread.dispose();
+        controller.dispose();
+        detector.dispose();
+    });
 });

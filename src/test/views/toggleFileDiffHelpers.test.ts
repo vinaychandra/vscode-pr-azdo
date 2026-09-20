@@ -6,6 +6,7 @@ import {
     computeRelativePath,
     extractPathFromGitRefUri,
     getWorkspaceFileUriFromDiffInput,
+    getSnapshotPathFromDiffInput,
     isUriInChangedFiles,
     buildDiffParams,
 } from '../../views/toggleFileDiffHelpers';
@@ -142,6 +143,28 @@ suite('getWorkspaceFileUriFromDiffInput', () => {
         );
 
         assert.strictEqual(getWorkspaceFileUriFromDiffInput(input), undefined);
+    });
+});
+
+suite('getSnapshotPathFromDiffInput', () => {
+    test('prefers the modified snapshot path', () => {
+        const input = new vscode.TabInputTextDiff(
+            buildGitRefUri('__empty__', 'base-sha'),
+            buildGitRefUri('src/new.ts', 'source-sha'),
+        );
+        assert.strictEqual(getSnapshotPathFromDiffInput(input), 'src/new.ts');
+    });
+
+    test('falls back to the original path for deletes', () => {
+        const input = new vscode.TabInputTextDiff(
+            buildGitRefUri('src/old.ts', 'base-sha'),
+            buildGitRefUri('__empty__', 'source-sha'),
+        );
+        assert.strictEqual(getSnapshotPathFromDiffInput(input), 'src/old.ts');
+    });
+
+    test('rejects non-diff inputs', () => {
+        assert.strictEqual(getSnapshotPathFromDiffInput(vscode.Uri.file('/repo/src/app.ts')), undefined);
     });
 });
 

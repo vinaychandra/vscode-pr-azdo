@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { getGitAPI, getActiveRepository, deleteLocalBranch, getCommitLog, gitCommitAll, gitStash, isBranchInSyncWithRemote, getBranchAheadBehind, fastForwardToUpstream, resetBranchToUpstream } from './git/gitExtension';
 import { RepositoryDetector } from './azdo/repositoryDetector';
 import { isSameAzDoRepository, parseAzDoPullRequestUrl, type ParsedAzDoPullRequestUrl } from './azdo/prUrlParser';
+import { iterationSelectionEntries, resolveIterationRange, selectedIterationIds } from './views/iterationSelection';
 import { EntraIdAuthProvider } from './azdo/auth/entraIdAuthProvider';
 import { AzDoApiClient, TenantMismatchError } from './azdo/apiClient';
 import { PullRequestService } from './azdo/prService';
@@ -12,7 +13,7 @@ import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type A
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME, type PersistedDrafts } from './views/prCommentController';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
-import { computeRelativePath, extractPathFromGitRefUri, getWorkspaceFileUriFromDiffInput, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
+import { computeRelativePath, extractPathFromGitRefUri, getSnapshotPathFromDiffInput, getWorkspaceFileUriFromDiffInput, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
@@ -142,6 +143,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		repoRoot?: string;
 		reviewScope: number | string;
 		apiBacked?: boolean;
+		latestIterationId?: number;
+		iterationId?: number;
 		compareToIterationId?: number;
 		gitRemote?: string;
 		externalApiClient?: AzDoApiClient;
@@ -335,6 +338,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			prService: PullRequestService;
 			remoteInfo: ParsedAzDoRemote;
 		},
+		iterationId?: number,
+		compareToIterationId = 0,
 	): Promise<boolean> {
 		if (!pr.pullRequestId || !pr.sourceRefName || !pr.targetRefName) {
 			vscode.window.showWarningMessage('Pull request source or target information is unavailable.');
@@ -359,14 +364,41 @@ export async function activate(context: vscode.ExtensionContext) {
 					pr.targetRefName!,
 				),
 			);
+			const snapshotPrService = external?.prService ?? prService;
+			let latestIterationId: number | undefined;
+			let selectedIterationId = iterationId;
+			let sourceCommit = snapshot.sourceCommit;
+			let comparisonCommit = snapshot.comparisonCommit;
+			if (iterationId !== undefined && snapshotPrService) {
+				const iterations = await snapshotPrService.getPrIterations(pr.pullRequestId!);
+				const latest = iterations[iterations.length - 1];
+				const selected = iterations.find(candidate => candidate.id === iterationId);
+				const comparison = compareToIterationId === 0
+					? undefined
+					: iterations.find(candidate => candidate.id === compareToIterationId);
+				latestIterationId = latest?.id;
+				if (!latestIterationId || !selected?.sourceRefCommit?.commitId) {
+					throw new Error(`Pull request iteration ${iterationId} is unavailable.`);
+				}
+				sourceCommit = selected.sourceRefCommit.commitId;
+				comparisonCommit = comparison?.sourceRefCommit?.commitId
+					?? selected.commonRefCommit?.commitId
+					?? '';
+				if (!comparisonCommit) {
+					throw new Error('The selected iteration range does not include a comparison commit.');
+				}
+			}
 			const previousExternalClient = pinnedSnapshotReview?.externalApiClient;
 			pinnedSnapshotReview = {
 				pr,
-				sourceRef: snapshot.sourceCommit,
-				targetRef: snapshot.targetCommit,
+				sourceRef: sourceCommit,
+				targetRef: comparisonCommit,
 				repoRoot: repo.rootUri.fsPath,
 				reviewScope: external?.reviewScope ?? pr.pullRequestId!,
 				apiBacked: false,
+				latestIterationId,
+				iterationId: selectedIterationId,
+				compareToIterationId,
 				gitRemote: external?.gitRemote,
 				externalApiClient: external?.apiClient,
 				externalPrService: external?.prService,
@@ -378,15 +410,20 @@ export async function activate(context: vscode.ExtensionContext) {
 			gitContentProvider.setApiContents(undefined);
 			activePrProvider?.pinSnapshotReview(
 				pr,
-				snapshot.sourceCommit,
-				snapshot.comparisonCommit,
+				sourceCommit,
+				comparisonCommit,
 				external?.prService ?? prService,
+				latestIterationId && selectedIterationId ? {
+					latestIterationId,
+					iterationId: selectedIterationId,
+					compareToIterationId,
+				} : undefined,
 			);
 			if (!reviewMode) {
 				reviewMode = true;
 				await context.workspaceState.update('reviewMode', true);
-				applyReviewMode();
 			}
+			applyReviewMode();
 			outputChannel.appendLine(
 				`[snapshot] Pinned PR #${pr.pullRequestId}: base ${snapshot.comparisonCommit.substring(0, 12)}..source ${snapshot.sourceCommit.substring(0, 12)} (target ${snapshot.targetCommit.substring(0, 12)})`,
 			);
@@ -405,7 +442,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		externalApiClient: AzDoApiClient,
 		externalPrService: PullRequestService,
 		externalRemoteInfo: ParsedAzDoRemote,
-		compareToIterationId?: number,
+		iterationId?: number,
+		compareToIterationId = 0,
 	): Promise<boolean> {
 		if (!pr.pullRequestId) {
 			vscode.window.showWarningMessage('Pull request information is unavailable.');
@@ -415,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		try {
 			const snapshot = await vscode.window.withProgress(
 				{ location: vscode.ProgressLocation.Notification, title: `Loading PR #${pr.pullRequestId} content…` },
-				() => externalPrService.getApiReviewSnapshot(pr.pullRequestId!, compareToIterationId),
+				() => externalPrService.getApiReviewSnapshot(pr.pullRequestId!, iterationId, compareToIterationId),
 			);
 			const previousExternalClient = pinnedSnapshotReview?.externalApiClient;
 			pinnedSnapshotReview = {
@@ -424,6 +462,8 @@ export async function activate(context: vscode.ExtensionContext) {
 				targetRef: snapshot.comparisonCommit,
 				reviewScope,
 				apiBacked: true,
+				latestIterationId: snapshot.latestIterationId,
+				iterationId: snapshot.iterationId,
 				compareToIterationId,
 				externalApiClient,
 				externalPrService,
@@ -446,17 +486,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				snapshot.comparisonCommit,
 				externalPrService,
 				{
-					headIterationId: snapshot.headIterationId,
+					latestIterationId: snapshot.latestIterationId,
+					iterationId: snapshot.iterationId,
 					compareToIterationId: snapshot.compareToIterationId,
 				},
 			);
 			if (!reviewMode) {
 				reviewMode = true;
 				await context.workspaceState.update('reviewMode', true);
-				applyReviewMode();
 			}
+			applyReviewMode();
 			outputChannel.appendLine(
-				`[snapshot/api] Pinned PR #${pr.pullRequestId}: iteration ${snapshot.headIterationId}, base ${snapshot.comparisonCommit.substring(0, 12)}..source ${snapshot.sourceCommit.substring(0, 12)}, ${snapshot.changes.length} file(s)`,
+				`[snapshot/api] Pinned PR #${pr.pullRequestId}: iteration ${snapshot.iterationId} vs ${snapshot.compareToIterationId}, ${snapshot.comparisonCommit.substring(0, 12)}..${snapshot.sourceCommit.substring(0, 12)}, ${snapshot.changes.length} file(s)`,
 			);
 			return true;
 		} catch (err) {
@@ -482,6 +523,164 @@ export async function activate(context: vscode.ExtensionContext) {
 			void context.workspaceState.update('reviewMode', reviewMode);
 			outputChannel.appendLine(`[ext] Review mode toggled: ${reviewMode}`);
 			applyReviewMode();
+		}),
+	);
+
+	async function refreshOpenSnapshotDiff(
+		originalTab: vscode.Tab | undefined,
+		filePath: string | undefined,
+		cursorLine: number,
+	): Promise<void> {
+		if (!originalTab || !filePath || vscode.window.tabGroups.activeTabGroup.activeTab !== originalTab) { return; }
+		const provider = activePrProvider;
+		const pr = provider?._activePrForContext;
+		const reviewContext = provider?.reviewContext;
+		if (!provider || !pr || reviewContext?.mode !== 'snapshot' || !reviewContext.sourceRef || !reviewContext.targetRef) {
+			return;
+		}
+
+		await provider.ensureReviewData();
+		const changeType = provider.getChangeType(filePath);
+		await vscode.window.tabGroups.close(originalTab);
+		if (changeType === undefined) {
+			vscode.window.showInformationMessage(`${filePath} is not changed in the selected iteration range.`);
+			return;
+		}
+
+		const targetBranch = pr.targetRefName?.replace(/^refs\/heads\//, '') ?? 'Base';
+		const sourceBranch = pr.sourceRefName?.replace(/^refs\/heads\//, '') ?? 'PR Source';
+		const repoRoot = getActiveRepository(gitApi, detector)?.rootUri ?? vscode.Uri.file('/');
+		const diff = buildDiffParams(
+			filePath,
+			changeType,
+			repoRoot,
+			reviewContext.targetRef,
+			targetBranch,
+			reviewContext.sourceRef,
+			sourceBranch,
+		);
+		await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title, {
+			preview: false,
+			viewColumn: vscode.ViewColumn.Active,
+		});
+		const editor = vscode.window.activeTextEditor;
+		if (editor) {
+			const line = Math.min(cursorLine, Math.max(0, editor.document.lineCount - 1));
+			const position = new vscode.Position(line, 0);
+			editor.selection = new vscode.Selection(position, position);
+			editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+		}
+	}
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.selectIteration', async () => {
+			const pinned = pinnedSnapshotReview;
+			const provider = activePrProvider;
+			if (!pinned || !provider?.isSnapshotReview) {
+				vscode.window.showInformationMessage('Iteration comparison is available during a no-checkout review.');
+				return;
+			}
+			const originalTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+			const openSnapshotPath = getSnapshotPathFromDiffInput(originalTab?.input);
+			const cursorLine = vscode.window.activeTextEditor?.selection.active.line ?? 0;
+
+			try {
+				const iterations = await provider.getAvailableIterations();
+				const head = iterations[iterations.length - 1];
+				if (!head?.id || !head.sourceRefCommit?.commitId) {
+					vscode.window.showWarningMessage('Pull request iteration information is unavailable.');
+					return;
+				}
+
+				type IterationPick = vscode.QuickPickItem & { iterationId?: number };
+				const availableIterationIds = iterations.flatMap(iteration => iteration.id ? [iteration.id] : []);
+				const pickedIds = new Set(selectedIterationIds(
+					availableIterationIds,
+					pinned.iterationId ?? head.id,
+					pinned.compareToIterationId ?? 0,
+				));
+				const items: IterationPick[] = iterationSelectionEntries(availableIterationIds).map(entry => {
+						if (entry.kind === 'base') {
+							return {
+								label: 'Base - common commit between source and target',
+								kind: vscode.QuickPickItemKind.Separator,
+							};
+						}
+						const iteration = iterations.find(candidate => candidate.id === entry.iterationId)!;
+						return {
+							label: `$(git-commit) Iteration ${entry.iterationId}${entry.latest ? ' (latest)' : ''}`,
+							description: iteration.author?.displayName,
+							detail: iteration.description
+								?? (iteration.createdDate ? new Date(iteration.createdDate).toLocaleString() : undefined),
+							iterationId: entry.iterationId,
+							picked: pickedIds.has(entry.iterationId),
+						};
+				});
+				const selected = await vscode.window.showQuickPick(items, {
+					title: `PR #${pinned.pr.pullRequestId}: Show Iterations`,
+					placeHolder: 'Select iterations; gaps are included automatically',
+					canPickMany: true,
+				});
+				if (!selected) { return; }
+				const range = resolveIterationRange(
+					availableIterationIds,
+					selected.flatMap(item => item.iterationId ? [item.iterationId] : []),
+				);
+				if (!range) { return; }
+
+				if (range.iterationId === pinned.iterationId
+					&& range.compareToIterationId === (pinned.compareToIterationId ?? 0)) { return; }
+
+				if (pinned.apiBacked && pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo && typeof pinned.reviewScope === 'string') {
+					const opened = await pinApiPullRequestSnapshot(
+						pinned.pr,
+						pinned.reviewScope,
+						pinned.externalApiClient,
+						pinned.externalPrService,
+						pinned.externalRemoteInfo,
+						range.iterationId,
+						range.compareToIterationId,
+					);
+					if (opened) {
+						await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
+					}
+					return;
+				}
+
+				const selectedIteration = iterations.find(iteration => iteration.id === range.iterationId);
+				const comparisonIteration = range.compareToIterationId === 0
+					? undefined
+					: iterations.find(iteration => iteration.id === range.compareToIterationId);
+				const sourceCommit = selectedIteration?.sourceRefCommit?.commitId;
+				const comparisonCommit = comparisonIteration?.sourceRefCommit?.commitId
+					?? selectedIteration?.commonRefCommit?.commitId;
+				if (!sourceCommit || !comparisonCommit) {
+					vscode.window.showWarningMessage('The selected iteration does not include a comparison commit.');
+					return;
+				}
+				pinned.sourceRef = sourceCommit;
+				pinned.targetRef = comparisonCommit;
+				pinned.latestIterationId = head.id;
+				pinned.iterationId = range.iterationId;
+				pinned.compareToIterationId = range.compareToIterationId;
+				gitContentProvider.setApiContents(undefined);
+				provider.pinSnapshotReview(
+					pinned.pr,
+					pinned.sourceRef,
+					pinned.targetRef,
+					pinned.externalPrService ?? prService,
+					{
+						latestIterationId: head.id,
+						iterationId: range.iterationId,
+						compareToIterationId: range.compareToIterationId,
+					},
+				);
+				await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				outputChannel.appendLine(`[iterations] Failed to select comparison: ${msg}`);
+				vscode.window.showErrorMessage(`Failed to select pull request iteration: ${msg}`);
+			}
 		}),
 	);
 
@@ -575,6 +774,9 @@ export async function activate(context: vscode.ExtensionContext) {
 					targetRef,
 					reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined,
 					pr?.pullRequestId ? getReviewScope(pr.pullRequestId) : undefined,
+						activePrProvider?.changeTrackingIds,
+						reviewContext?.iterationId,
+						reviewContext?.compareToIterationId,
 				);
 				await commentController.updateThreads(activePrProvider?.filteredThreads);
 				if (pr?.pullRequestId !== activePrProvider?._activePrForContext?.pullRequestId) { return; }
@@ -745,6 +947,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				pinnedSnapshotReview.sourceRef,
 				pinnedSnapshotReview.targetRef,
 				pinnedSnapshotReview.externalPrService,
+				pinnedSnapshotReview.latestIterationId && pinnedSnapshotReview.iterationId ? {
+					latestIterationId: pinnedSnapshotReview.latestIterationId,
+					iterationId: pinnedSnapshotReview.iterationId,
+					compareToIterationId: pinnedSnapshotReview.compareToIterationId ?? 0,
+				} : undefined,
 			);
 		} else if (providerAfterRebuild && pinnedSnapshotReview?.repoRoot && activeRepoRoot && areSamePaths(pinnedSnapshotReview.repoRoot, activeRepoRoot)) {
 			providerAfterRebuild.pinSnapshotReview(
@@ -752,6 +959,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				pinnedSnapshotReview.sourceRef,
 				pinnedSnapshotReview.targetRef,
 				pinnedSnapshotReview.externalPrService ?? prService,
+				pinnedSnapshotReview.latestIterationId && pinnedSnapshotReview.iterationId ? {
+					latestIterationId: pinnedSnapshotReview.latestIterationId,
+					iterationId: pinnedSnapshotReview.iterationId,
+					compareToIterationId: pinnedSnapshotReview.compareToIterationId ?? 0,
+				} : undefined,
 			);
 		}
 	}
@@ -893,7 +1105,8 @@ export async function activate(context: vscode.ExtensionContext) {
 						pinned.externalApiClient,
 						pinned.externalPrService,
 						pinned.externalRemoteInfo,
-						pinned.compareToIterationId,
+						pinned.iterationId,
+						pinned.compareToIterationId ?? 0,
 					);
 					return;
 				}
@@ -906,7 +1119,12 @@ export async function activate(context: vscode.ExtensionContext) {
 						remoteInfo: pinned.externalRemoteInfo,
 					}
 					: undefined;
-				await pinPullRequestSnapshot(pinned.pr, external);
+				await pinPullRequestSnapshot(
+					pinned.pr,
+					external,
+					pinned.iterationId,
+					pinned.compareToIterationId ?? 0,
+				);
 				return;
 			}
 			const repo = getActiveRepository(gitApi, detector);

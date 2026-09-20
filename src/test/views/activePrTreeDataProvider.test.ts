@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { ActivePrTreeDataProvider, type CommentFilter } from '../../views/activePrTreeDataProvider';
-import { ActivePrRootItem, ReviewModeToggleItem } from '../../views/activePrTreeItems';
+import { ActivePrRootItem, IterationSelectorItem, ReviewModeToggleItem } from '../../views/activePrTreeItems';
 import { CommentThreadStatus, CommentType, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequestCommentThread, GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { PullRequestService } from '../../azdo/prService';
@@ -1243,7 +1243,8 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
 
         const snapshotPr = { pullRequestId: 42, title: 'Snapshot review' } as GitPullRequest;
         provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha', undefined, {
-            headIterationId: 3,
+            latestIterationId: 3,
+            iterationId: 3,
             compareToIterationId: 1,
         });
         const callsBeforeBranchChange = findCalls;
@@ -1256,9 +1257,16 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         assert.strictEqual(provider.reviewContext?.mode, 'snapshot');
         assert.strictEqual(provider.reviewContext?.sourceRef, 'source-sha');
         assert.strictEqual(provider.reviewContext?.targetRef, 'target-sha');
-        assert.strictEqual(provider.reviewContext?.headIterationId, 3);
+        assert.strictEqual(provider.reviewContext?.latestIterationId, 3);
+        assert.strictEqual(provider.reviewContext?.iterationId, 3);
         assert.strictEqual(provider.reviewContext?.compareToIterationId, 1);
         assert.strictEqual(findCalls, callsBeforeBranchChange);
+
+        const roots = await provider.getChildren();
+        assert.ok(roots[0] instanceof ReviewModeToggleItem);
+        assert.ok(roots[1] instanceof IterationSelectorItem);
+        assert.ok(roots[2] instanceof ActivePrRootItem);
+        assert.strictEqual(roots[1].description, 'Iterations 2-3');
 
         provider.dispose();
         harness.dispose();
@@ -1285,7 +1293,7 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
 
         const snapshotPr = { pullRequestId: 42, title: 'External snapshot' } as GitPullRequest;
         provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha', snapshotService);
-        const root = (await provider.getChildren())[1] as ActivePrRootItem;
+        const root = (await provider.getChildren()).find(item => item instanceof ActivePrRootItem)!;
         await provider.getChildren(root);
 
         assert.strictEqual(snapshotIterationCalls, 1);
@@ -1294,6 +1302,38 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         provider.stopSnapshotReview(workspaceService);
         await new Promise(resolve => setTimeout(resolve, 0));
         assert.strictEqual(provider.isSnapshotReview, false);
+
+        provider.dispose();
+        harness.dispose();
+    });
+
+    test('loads snapshot files relative to the selected iteration', async () => {
+        const changeCalls: unknown[][] = [];
+        const snapshotService = createMockPrService({
+            getPrIterations: async () => [
+                { id: 1, sourceRefCommit: { commitId: 'old-source' } },
+                { id: 3, sourceRefCommit: { commitId: 'head-source' } },
+            ] as any,
+            getPrIterationChanges: async (...args: unknown[]) => {
+                changeCalls.push(args);
+                return { changeEntries: [] };
+            },
+        });
+        const harness = makeMutableGitApi('local/main', 'local-commit');
+        const provider = new ActivePrTreeDataProvider(snapshotService, harness.api, createMockLog());
+        await new Promise(resolve => setTimeout(resolve, 0));
+        provider.pinSnapshotReview(
+            { pullRequestId: 42, title: 'Iteration review' } as GitPullRequest,
+            'iteration-two-source',
+            'old-source',
+            snapshotService,
+            { latestIterationId: 3, iterationId: 2, compareToIterationId: 1 },
+        );
+
+        const root = (await provider.getChildren()).find(item => item instanceof ActivePrRootItem)!;
+        await provider.getChildren(root);
+
+        assert.deepStrictEqual(changeCalls, [[42, 2, 1]]);
 
         provider.dispose();
         harness.dispose();

@@ -4,9 +4,11 @@ import { CommentType, CommentThreadStatus, VersionControlChangeType } from 'azur
 import type { PullRequestService } from '../azdo/prService';
 import { isAuthError } from '../azdo/apiClient';
 import type { API } from '../typings/git';
+import { iterationRangeDescription, iterationRangeDescriptionFromBounds, resolveIterationRange, selectedIterationIds } from './iterationSelection';
 import {
     ActivePrRootItem,
     ReviewModeToggleItem,
+    IterationSelectorItem,
     SectionHeaderItem,
     FolderItem,
     FileChangeItem,
@@ -25,7 +27,8 @@ export interface ActivePrReviewContext {
     mode: 'workingTree' | 'snapshot';
     sourceRef?: string;
     targetRef?: string;
-    headIterationId?: number;
+    latestIterationId?: number;
+    iterationId?: number;
     compareToIterationId?: number;
 }
 
@@ -61,6 +64,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private _reviewMode = false;
     private _reviewedFiles = new Set<string>();
     private _changeTypeMap = new Map<string, VersionControlChangeType>();
+    private _changeTrackingIdMap = new Map<string, number>();
     private _parentMap = new Map<ActivePrTreeItem, ActivePrTreeItem | undefined>();
     private _reviewContext: ActivePrReviewContext | undefined;
 
@@ -80,6 +84,21 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     /** Expose cached iterations for the "View Original Context" feature. */
     get iterations(): GitPullRequestIteration[] | undefined {
         return this._iterations;
+    }
+
+    async getAvailableIterations(): Promise<GitPullRequestIteration[]> {
+        if (this._iterations) { return this._iterations; }
+        const prId = this._activePr?.pullRequestId;
+        if (!prId) { return []; }
+        const generation = this._activePrGeneration;
+        const iterations = await this.prService.getPrIterations(prId);
+        if (!this.isCurrentPr(prId, generation)) { return []; }
+        this._iterations = iterations;
+        return iterations;
+    }
+
+    async ensureReviewData(): Promise<void> {
+        await this.ensureData();
     }
 
     /** Expose cached threads for the comment controller. */
@@ -107,6 +126,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     /** Read-only view of all known file change types (path → bitmask). */
     get changeTypes(): ReadonlyMap<string, VersionControlChangeType> {
         return this._changeTypeMap;
+    }
+
+    get changeTrackingIds(): ReadonlyMap<string, number> {
+        return this._changeTrackingIdMap;
     }
 
     private collectFilePaths(nodes: (FolderItem | FileChangeItem)[]): string[] {
@@ -353,6 +376,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         this._allThreads = undefined;
         this._iterations = undefined;
         this._changeTypeMap.clear();
+        this._changeTrackingIdMap.clear();
         if (this.isSnapshotReview) {
             this._onDidChangeTreeData.fire();
             this._onDidUpdateComments.fire();
@@ -370,7 +394,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         sourceRef: string,
         targetRef: string,
         snapshotPrService?: PullRequestService,
-        iteration?: { headIterationId: number; compareToIterationId?: number },
+        iteration?: { latestIterationId: number; iterationId: number; compareToIterationId: number },
     ): void {
         this._detectionGeneration++;
         this._lastDetectedBranch = undefined;
@@ -417,7 +441,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             || nextContext?.mode !== this._reviewContext?.mode
             || nextContext?.sourceRef !== this._reviewContext?.sourceRef
             || nextContext?.targetRef !== this._reviewContext?.targetRef
-            || nextContext?.headIterationId !== this._reviewContext?.headIterationId
+            || nextContext?.latestIterationId !== this._reviewContext?.latestIterationId
+            || nextContext?.iterationId !== this._reviewContext?.iterationId
             || nextContext?.compareToIterationId !== this._reviewContext?.compareToIterationId;
         this._activePr = pr;
         this._reviewContext = nextContext;
@@ -428,6 +453,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             this._allThreads = undefined;
             this._iterations = undefined;
             this._reviewedFiles.clear();
+            this._changeTypeMap.clear();
+            this._changeTrackingIdMap.clear();
 
             const resetFilters = vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('resetFiltersOnPrChange', false);
             if (resetFilters) {
@@ -484,10 +511,27 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
         // Root level → review toggle + PR root item
         if (!element) {
-            return trackChildren(undefined, [
+            const roots: ActivePrTreeItem[] = [
                 new ReviewModeToggleItem(this._reviewMode, this._allThreads?.length ?? 0),
-                new ActivePrRootItem(this._activePr, this.isSnapshotReview),
-            ]);
+            ];
+            if (this.isSnapshotReview) {
+                const iterationId = this._reviewContext?.iterationId;
+                const compareToIterationId = this._reviewContext?.compareToIterationId;
+                const latestIterationId = this._reviewContext?.latestIterationId;
+                const availableIds = (this._iterations ?? []).flatMap(iteration => iteration.id ? [iteration.id] : []);
+                const selectedIds = iterationId !== undefined && compareToIterationId !== undefined
+                    ? selectedIterationIds(availableIds, iterationId, compareToIterationId)
+                    : [];
+                const range = resolveIterationRange(availableIds, selectedIds);
+                const description = latestIterationId && iterationId !== undefined && compareToIterationId !== undefined
+                    ? (range
+                        ? iterationRangeDescription(range, latestIterationId)
+                        : iterationRangeDescriptionFromBounds(iterationId, compareToIterationId, latestIterationId))
+                    : 'Full pull request';
+                roots.push(new IterationSelectorItem(description));
+            }
+            roots.push(new ActivePrRootItem(this._activePr, this.isSnapshotReview));
+            return trackChildren(undefined, roots);
         }
 
         // PR root → Files + Commits sections
@@ -546,23 +590,40 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
 
         try {
             // Fetch iterations to find the latest one
-            const iterations = await this.prService.getPrIterations(prId);
+            const iterations = this._iterations ?? await this.prService.getPrIterations(prId);
             if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
             this._iterations = iterations;
             const latestIteration = iterations[iterations.length - 1];
+            if (this._reviewContext?.mode === 'snapshot' && latestIteration?.id) {
+                this._reviewContext = {
+                    ...this._reviewContext,
+                    latestIterationId: latestIteration.id,
+                    iterationId: this._reviewContext.iterationId ?? latestIteration.id,
+                    compareToIterationId: this._reviewContext.compareToIterationId ?? 0,
+                };
+            }
 
-            if (latestIteration?.id) {
-                const iterationChanges = await this.prService.getPrIterationChanges(prId, latestIteration.id);
+            const selectedIterationId = this._reviewContext?.iterationId ?? latestIteration?.id;
+            if (selectedIterationId) {
+                const iterationChanges = await this.prService.getPrIterationChanges(
+                    prId,
+                    selectedIterationId,
+                    this._reviewContext?.compareToIterationId,
+                );
                 if (!this.isCurrentPr(prId, generation)) { return this.getDataCounts(); }
                 const changes = (iterationChanges.changeEntries ?? []) as GitPullRequestChange[];
                 this._fileTree = buildFileTree(changes);
                 this._changeTypeMap.clear();
+                this._changeTrackingIdMap.clear();
                 const ctCounts = { Add: 0, Edit: 0, Delete: 0, Rename: 0, Other: 0 };
                 for (const ch of changes) {
                     const p = getChangePath(ch);
                     if (!p) { continue; }
                     const ct = (ch as any).changeType ?? VersionControlChangeType.None;
                     this._changeTypeMap.set(p, ct);
+                    if (ch.changeTrackingId !== undefined) {
+                        this._changeTrackingIdMap.set(p, ch.changeTrackingId);
+                    }
                     if (ct & VersionControlChangeType.Delete) { ctCounts.Delete++; }
                     else if (ct & VersionControlChangeType.Add) { ctCounts.Add++; }
                     else if (ct & VersionControlChangeType.Rename) { ctCounts.Rename++; }
@@ -570,7 +631,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                     else { ctCounts.Other++; }
                 }
                 this.log.appendLine(
-                    `[active-pr] Loaded ${changes.length} file change(s) from iteration ${latestIteration.id} ` +
+                    `[active-pr] Loaded ${changes.length} file change(s) from iteration ${selectedIterationId} ` +
                     `(Edit=${ctCounts.Edit}, Add=${ctCounts.Add}, Delete=${ctCounts.Delete}, Rename=${ctCounts.Rename}, Other=${ctCounts.Other})`,
                 );
             } else {

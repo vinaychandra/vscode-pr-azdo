@@ -7,6 +7,7 @@ import {
     FolderItem,
     FileChangeItem,
     ActivePrRootItem,
+    IterationSelectorItem,
     ReviewModeToggleItem,
     SectionHeaderItem,
     CommitItem,
@@ -83,6 +84,20 @@ suite('iconForChangeType', () => {
     test('combined Add|Edit bitmask prefers Add styling', () => {
         const icon = iconForChangeType(VersionControlChangeType.Add | VersionControlChangeType.Edit);
         assert.strictEqual((icon as vscode.ThemeIcon).id, 'diff-added');
+    });
+});
+
+suite('IterationSelectorItem', () => {
+    test('shows full PR comparison by default', () => {
+        const item = new IterationSelectorItem();
+        assert.strictEqual(item.label, 'Show Iterations');
+        assert.strictEqual(item.description, 'Full pull request');
+        assert.strictEqual(item.command?.command, 'vscode-pr-azdo.selectIteration');
+    });
+
+    test('shows the selected comparison iteration', () => {
+        const item = new IterationSelectorItem('Iterations 2-4');
+        assert.strictEqual(item.description, 'Iterations 2-4');
     });
 });
 

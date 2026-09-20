@@ -12,8 +12,9 @@ export interface FileContentRequest {
 
 export interface ApiPullRequestSnapshot {
     iterations: GitPullRequestIteration[];
-    headIterationId: number;
-    compareToIterationId?: number;
+    latestIterationId: number;
+    iterationId: number;
+    compareToIterationId: number;
     sourceCommit: string;
     targetCommit: string;
     comparisonCommit: string;
@@ -231,26 +232,34 @@ export class PullRequestService {
         });
     }
 
-    /** Build immutable content for the latest PR head against its merge base or a selected iteration. */
-    async getApiReviewSnapshot(pullRequestId: number, compareToIterationId?: number): Promise<ApiPullRequestSnapshot> {
+    /** Build immutable content for an Azure DevOps iteration range. */
+    async getApiReviewSnapshot(
+        pullRequestId: number,
+        requestedIterationId?: number,
+        compareToIterationId = 0,
+    ): Promise<ApiPullRequestSnapshot> {
         const iterations = await this.getPrIterations(pullRequestId);
-        const head = iterations[iterations.length - 1];
-        const headIterationId = head?.id;
-        const sourceCommit = head?.sourceRefCommit?.commitId;
-        const targetCommit = head?.targetRefCommit?.commitId;
-        const selectedIteration = compareToIterationId === undefined
+        const latestIteration = iterations[iterations.length - 1];
+        const latestIterationId = latestIteration?.id;
+        const selectedIteration = requestedIterationId === undefined
+            ? latestIteration
+            : iterations.find(iteration => iteration.id === requestedIterationId);
+        const comparisonIteration = compareToIterationId === 0
             ? undefined
             : iterations.find(iteration => iteration.id === compareToIterationId);
-        const comparisonCommit = selectedIteration?.sourceRefCommit?.commitId
-            ?? head?.commonRefCommit?.commitId;
-        if (!headIterationId || !sourceCommit || !targetCommit || !comparisonCommit) {
+        const iterationId = selectedIteration?.id;
+        const sourceCommit = selectedIteration?.sourceRefCommit?.commitId;
+        const targetCommit = selectedIteration?.targetRefCommit?.commitId;
+        const comparisonCommit = comparisonIteration?.sourceRefCommit?.commitId
+            ?? selectedIteration?.commonRefCommit?.commitId;
+        if (!latestIterationId || !iterationId || !sourceCommit || !targetCommit || !comparisonCommit) {
             throw new Error('Azure DevOps did not return complete commit information for the pull request iterations.');
         }
-        if (compareToIterationId !== undefined && !selectedIteration) {
-            throw new Error(`Pull request iteration ${compareToIterationId} was not found.`);
+        if (compareToIterationId !== 0 && !comparisonIteration) {
+            throw new Error(`Pull request comparison iteration ${compareToIterationId} was not found.`);
         }
 
-        const changeResult = await this.getPrIterationChanges(pullRequestId, headIterationId, compareToIterationId);
+        const changeResult = await this.getPrIterationChanges(pullRequestId, iterationId, compareToIterationId);
         const changes = (changeResult.changeEntries ?? []) as GitPullRequestChange[];
         const requests: FileContentRequest[] = [];
         for (const change of changes) {
@@ -279,7 +288,8 @@ export class PullRequestService {
 
         return {
             iterations,
-            headIterationId,
+            latestIterationId,
+            iterationId,
             compareToIterationId,
             sourceCommit,
             targetCommit,
@@ -330,6 +340,9 @@ export class PullRequestService {
         pullRequestId: number,
         content: string,
         threadContext?: { filePath: string; startLine: number; startCol: number; endLine: number; endCol: number; side?: 'left' | 'right' },
+        changeTrackingId?: number,
+        iterationId?: number,
+        compareToIterationId?: number,
     ): Promise<GitPullRequestCommentThread> {
         const thread: GitPullRequestCommentThread = {
             comments: [{ content, commentType: CommentType.Text }],
@@ -346,6 +359,17 @@ export class PullRequestService {
                     ? { leftFileStart: position.start, leftFileEnd: position.end }
                     : { rightFileStart: position.start, rightFileEnd: position.end }),
             };
+            if (changeTrackingId !== undefined && iterationId !== undefined) {
+                thread.pullRequestThreadContext = {
+                    changeTrackingId,
+                    iterationContext: {
+                        firstComparingIteration: compareToIterationId && compareToIterationId > 0
+                            ? compareToIterationId
+                            : iterationId,
+                        secondComparingIteration: iterationId,
+                    },
+                };
+            }
         }
         return this.withGitApi(git => git.createThread(
             thread,

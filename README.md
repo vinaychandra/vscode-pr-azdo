@@ -37,6 +37,8 @@ Git object data and refs under `.git` are updated by the fetch. The selected no-
 
 You can also run **Review Pull Request from URL** without opening a folder or cloning the repository. For repository-free and external-repository reviews, the extension retrieves only the pull request's changed paths and selected source/comparison revisions through Azure DevOps APIs. It resolves all file versions in one batch request and downloads their unique blobs in one ZIP request; repository size does not affect the number of files downloaded.
 
+During a no-checkout review, select **Show Iterations** directly below the Review Mode toggle to choose one or more updates. Iterations are ordered newest first, with **Base** shown last as the common commit between the source and target branches. Selecting iteration 3 alone compares iteration 3 with iteration 2; selecting iterations 2 through 4 compares iteration 4 with iteration 1. If selected iterations contain gaps, the intermediate iterations are included automatically; selecting none falls back to the latest iteration. The Files tree, the currently open diff, and new comment metadata all follow the selected range.
+
 ### Inline Comments
 
 - Comments appear as inline annotations on the exact lines they reference

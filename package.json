@@ -138,6 +138,11 @@
         "icon": "$(eye)"
       },
       {
+        "command": "vscode-pr-azdo.selectIteration",
+        "title": "Show Pull Request Iterations",
+        "icon": "$(git-compare)"
+      },
+      {
         "command": "vscode-pr-azdo.filterComments",
         "title": "Filter Comments",
         "icon": "$(filter)"

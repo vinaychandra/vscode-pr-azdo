@@ -83,7 +83,7 @@ suite('PullRequestService — getFileContents', () => {
         assert.strictEqual(contents.get(fileContentKey('base-sha', 'src/app.ts')), 'base content');
     });
 
-    test('builds latest-head content against only the selected iteration', async () => {
+    test('builds content for an arbitrary Azure iteration range', async () => {
         const zip = new JSZip();
         zip.file('head-blob', 'head content');
         zip.file('iteration-blob', 'iteration content');
@@ -99,9 +99,15 @@ suite('PullRequestService — getFileContents', () => {
                 },
                 {
                     id: 2,
-                    sourceRefCommit: { commitId: 'head-sha' },
+                    sourceRefCommit: { commitId: 'iteration-two' },
                     targetRefCommit: { commitId: 'target-two' },
                     commonRefCommit: { commitId: 'base-two' },
+                },
+                {
+                    id: 3,
+                    sourceRefCommit: { commitId: 'head-sha' },
+                    targetRefCommit: { commitId: 'target-three' },
+                    commonRefCommit: { commitId: 'base-three' },
                 },
             ],
             getPullRequestIterationChanges: async (...args: unknown[]) => {
@@ -120,15 +126,38 @@ suite('PullRequestService — getFileContents', () => {
             getBlobsZip: async () => Readable.from(zipBuffer),
         });
 
-        const snapshot = await service.getApiReviewSnapshot(42, 1);
+        const snapshot = await service.getApiReviewSnapshot(42, 2, 1);
 
-        assert.strictEqual(snapshot.headIterationId, 2);
+        assert.strictEqual(snapshot.iterationId, 2);
         assert.strictEqual(snapshot.compareToIterationId, 1);
-        assert.strictEqual(snapshot.sourceCommit, 'head-sha');
+        assert.strictEqual(snapshot.sourceCommit, 'iteration-two');
         assert.strictEqual(snapshot.comparisonCommit, 'iteration-one');
         assert.deepStrictEqual(changeCalls, [['repo', 42, 2, 'project', undefined, undefined, 1]]);
-        assert.strictEqual(snapshot.contents.get(fileContentKey('head-sha', 'src/app.ts')), 'head content');
+        assert.strictEqual(snapshot.contents.get(fileContentKey('iteration-two', 'src/app.ts')), 'head content');
         assert.strictEqual(snapshot.contents.get(fileContentKey('iteration-one', 'src/app.ts')), 'iteration content');
+    });
+
+    test('uses the selected iteration common commit when compareTo is Base', async () => {
+        const changeCalls: unknown[][] = [];
+        const service = createService({
+            getPullRequestIterations: async () => [{
+                id: 1,
+                sourceRefCommit: { commitId: 'iteration-one' },
+                targetRefCommit: { commitId: 'target-at-one' },
+                commonRefCommit: { commitId: 'common-at-one' },
+            }],
+            getPullRequestIterationChanges: async (...args: unknown[]) => {
+                changeCalls.push(args);
+                return { changeEntries: [] };
+            },
+        });
+
+        const snapshot = await service.getApiReviewSnapshot(42, 1, 0);
+
+        assert.strictEqual(snapshot.sourceCommit, 'iteration-one');
+        assert.strictEqual(snapshot.comparisonCommit, 'common-at-one');
+        assert.notStrictEqual(snapshot.comparisonCommit, snapshot.targetCommit);
+        assert.deepStrictEqual(changeCalls, [['repo', 42, 1, 'project', undefined, undefined, 0]]);
     });
 });
 
@@ -151,6 +180,59 @@ suite('PullRequestService — getPrIterationChanges', () => {
             ['repo', 42, 5, 'project', undefined, undefined, 2],
             ['repo', 42, 5, 'project', 100, 100, 2],
         ]);
+    });
+});
+
+suite('PullRequestService — createThread', () => {
+    test('includes selected iteration context and change tracking ID', async () => {
+        let request: any;
+        const service = createService({
+            createThread: async (thread: unknown) => {
+                request = thread;
+                return thread;
+            },
+        });
+
+        await service.createThread(
+            42,
+            'Review comment',
+            { filePath: '/src/app.ts', startLine: 4, startCol: 1, endLine: 4, endCol: 5 },
+            17,
+            5,
+            2,
+        );
+
+        assert.deepStrictEqual(request.pullRequestThreadContext, {
+            changeTrackingId: 17,
+            iterationContext: {
+                firstComparingIteration: 2,
+                secondComparingIteration: 5,
+            },
+        });
+    });
+
+    test('represents a Base comparison by using the selected iteration on both sides', async () => {
+        let request: any;
+        const service = createService({
+            createThread: async (thread: unknown) => {
+                request = thread;
+                return thread;
+            },
+        });
+
+        await service.createThread(
+            42,
+            'Base comparison comment',
+            { filePath: '/src/app.ts', startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
+            17,
+            1,
+            0,
+        );
+
+        assert.deepStrictEqual(request.pullRequestThreadContext.iterationContext, {
+            firstComparingIteration: 1,
+            secondComparingIteration: 1,
+        });
     });
 });
 

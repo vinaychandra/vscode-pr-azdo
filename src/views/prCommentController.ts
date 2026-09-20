@@ -51,6 +51,9 @@ export class PrCommentController implements vscode.Disposable {
 
     /** Map of repo-relative path → AzDO change type (bitmask), used to detect deleted files. */
     private _changeTypes = new Map<string, number>();
+    private _changeTrackingIds = new Map<string, number>();
+    private _iterationId: number | undefined;
+    private _compareToIterationId: number | undefined;
 
     /** Git ref for the target branch (e.g. 'origin/main'); used to anchor comments on deleted files. */
     private _targetRef: string | undefined;
@@ -154,6 +157,9 @@ export class PrCommentController implements vscode.Disposable {
         targetRef?: string,
         sourceRef?: string,
         draftScope: number | string | undefined = prId,
+        changeTrackingIds?: ReadonlyMap<string, number>,
+        iterationId?: number,
+        compareToIterationId?: number,
     ): void {
         if (draftScope !== this._draftScope) {
             this.cacheRenderedDrafts();
@@ -165,6 +171,9 @@ export class PrCommentController implements vscode.Disposable {
         this._prFilePaths = new Set(prFilePaths ?? []);
         this._currentUserId = currentUserId;
         this._changeTypes = changeTypes ? new Map(changeTypes) : new Map();
+        this._changeTrackingIds = changeTrackingIds ? new Map(changeTrackingIds) : new Map();
+        this._iterationId = iterationId;
+        this._compareToIterationId = compareToIterationId;
         this._targetRef = targetRef;
         this._sourceRef = sourceRef;
         this.log.appendLine(`[comments] setPrContext: prId=${prId}, draftScope=${draftScope ?? '(none)'}, userId=${currentUserId ?? '(none)'}, filePaths=[${[...(prFilePaths ?? [])].join(', ')}], targetRef=${targetRef ?? '(none)'}, sourceRef=${sourceRef ?? '(working tree)'}`);
@@ -298,6 +307,9 @@ export class PrCommentController implements vscode.Disposable {
                 this._prId,
                 reply.text,
                 { filePath: `/${filePath}`, startLine, startCol, endLine, endCol, side },
+                this._changeTrackingIds.get(filePath),
+                this._iterationId,
+                this._compareToIterationId,
             );
 
             // Replace the temporary thread with a proper one

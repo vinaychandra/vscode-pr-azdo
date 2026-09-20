@@ -44,6 +44,20 @@ export class ReviewModeToggleItem extends vscode.TreeItem {
     }
 }
 
+export class IterationSelectorItem extends vscode.TreeItem {
+    constructor(description = 'Full pull request') {
+        super('Show Iterations', vscode.TreeItemCollapsibleState.None);
+        this.description = description;
+        this.iconPath = new vscode.ThemeIcon('git-compare');
+        this.contextValue = 'activePr.iterationSelector';
+        this.tooltip = 'Choose one or more contiguous pull request iterations to review';
+        this.command = {
+            command: 'vscode-pr-azdo.selectIteration',
+            title: 'Show Iterations',
+        };
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Section headers (Files / Commits)
 // ---------------------------------------------------------------------------
@@ -222,6 +236,7 @@ export class CommitItem extends vscode.TreeItem {
 export type ActivePrTreeItem =
     | ActivePrRootItem
     | ReviewModeToggleItem
+    | IterationSelectorItem
     | SectionHeaderItem
     | FolderItem
     | FileChangeItem
