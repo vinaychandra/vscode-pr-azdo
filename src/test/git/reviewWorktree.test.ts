@@ -177,10 +177,15 @@ suite('reviewWorktree', () => {
         const remote = createRepository();
         cleanup.push(remote);
         git(remote, 'branch', '-M', 'main');
+        const commonCommit = git(remote, 'rev-parse', 'HEAD');
         git(remote, 'checkout', '-b', 'feature/test');
         fs.writeFileSync(path.join(remote, 'file.txt'), 'feature');
         git(remote, 'add', 'file.txt');
         git(remote, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'feature');
+        git(remote, 'checkout', 'main');
+        fs.writeFileSync(path.join(remote, 'target-only.txt'), 'target');
+        git(remote, 'add', 'target-only.txt');
+        git(remote, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'target');
 
         const clone = createRepository();
         cleanup.push(clone);
@@ -195,6 +200,7 @@ suite('reviewWorktree', () => {
 
         assert.strictEqual(snapshot.sourceCommit, git(remote, 'rev-parse', 'feature/test'));
         assert.strictEqual(snapshot.targetCommit, git(remote, 'rev-parse', 'main'));
+        assert.strictEqual(snapshot.comparisonCommit, commonCommit);
         assert.strictEqual(git(clone, 'rev-parse', 'HEAD'), headBefore);
         assert.strictEqual(git(clone, 'branch', '--show-current'), branchBefore);
         assert.strictEqual(fs.readFileSync(path.join(clone, 'file.txt'), 'utf-8'), 'dirty working copy');

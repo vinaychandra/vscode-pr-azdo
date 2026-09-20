@@ -376,7 +376,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			activePrProvider?.pinSnapshotReview(
 				pr,
 				snapshot.sourceCommit,
-				snapshot.targetCommit,
+				snapshot.comparisonCommit,
 				external?.prService ?? prService,
 			);
 			if (!reviewMode) {
@@ -384,7 +384,9 @@ export async function activate(context: vscode.ExtensionContext) {
 				await context.workspaceState.update('reviewMode', true);
 				applyReviewMode();
 			}
-			outputChannel.appendLine(`[snapshot] Pinned PR #${pr.pullRequestId}: ${snapshot.targetCommit.substring(0, 12)}..${snapshot.sourceCommit.substring(0, 12)}`);
+			outputChannel.appendLine(
+				`[snapshot] Pinned PR #${pr.pullRequestId}: base ${snapshot.comparisonCommit.substring(0, 12)}..source ${snapshot.sourceCommit.substring(0, 12)} (target ${snapshot.targetCommit.substring(0, 12)})`,
+			);
 			return true;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

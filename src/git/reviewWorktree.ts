@@ -20,6 +20,7 @@ export interface PreparedReviewWorktree {
 export interface PullRequestSnapshot {
     sourceCommit: string;
     targetCommit: string;
+    comparisonCommit: string;
     sourceRef: string;
     targetRef: string;
 }
@@ -98,7 +99,8 @@ export async function fetchPullRequestSnapshot(
             git(repoRoot, ['rev-parse', `${sourceRef}^{commit}`]),
             git(repoRoot, ['rev-parse', `${targetRef}^{commit}`]),
         ]);
-        return { sourceCommit, targetCommit, sourceRef, targetRef };
+        const comparisonCommit = await git(repoRoot, ['merge-base', sourceCommit, targetCommit]);
+        return { sourceCommit, targetCommit, comparisonCommit, sourceRef, targetRef };
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`Unable to fetch PR #${pullRequestId} snapshot from ${remoteName}: ${msg}`);
