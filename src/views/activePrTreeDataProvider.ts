@@ -30,6 +30,7 @@ export interface ActivePrReviewContext {
     latestIterationId?: number;
     iterationId?: number;
     compareToIterationId?: number;
+    checkoutBacked?: boolean;
 }
 
 /**
@@ -394,7 +395,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         sourceRef: string,
         targetRef: string,
         snapshotPrService?: PullRequestService,
-        iteration?: { latestIterationId: number; iterationId: number; compareToIterationId: number },
+        iteration?: { latestIterationId: number; iterationId: number; compareToIterationId: number; checkoutBacked?: boolean },
     ): void {
         this._detectionGeneration++;
         this._lastDetectedBranch = undefined;
@@ -443,7 +444,8 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             || nextContext?.targetRef !== this._reviewContext?.targetRef
             || nextContext?.latestIterationId !== this._reviewContext?.latestIterationId
             || nextContext?.iterationId !== this._reviewContext?.iterationId
-            || nextContext?.compareToIterationId !== this._reviewContext?.compareToIterationId;
+            || nextContext?.compareToIterationId !== this._reviewContext?.compareToIterationId
+            || nextContext?.checkoutBacked !== this._reviewContext?.checkoutBacked;
         this._activePr = pr;
         this._reviewContext = nextContext;
         if (changed) {

@@ -17,6 +17,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - **No-checkout reviews now show the pull request's actual changes** — snapshot diffs compare the source commit with its merge base instead of the latest target commit, preventing unrelated target-branch updates from appearing as reversed or incorrect changes.
 - **Comments in repository-free reviews** — existing threads now appear inline on virtual diff documents, and the editor gutter exposes the control for adding new comments without requiring a workspace root.
 - **Comments appear immediately in blank-window reviews** — opening a pull request URL now applies the persisted Review Mode state to the newly created provider, so comments no longer require disabling and re-enabling review first.
+- **Unsupported AI actions in no-checkout reviews** — Review with Copilot, Resolve with Copilot, Apply Suggestion, and direct `/review`, `/review-quick`, and `/fix` chat commands now report that a checkout is required. Read-only `/explain` remains available, and iteration reviews started from a standard checkout or review worktree retain AI support.
 
 ## [0.0.15]
 

@@ -107,6 +107,17 @@ suite('PrContextProvider — PR Context', () => {
         assert.strictEqual(provider.isSnapshotReview, true);
         assert.strictEqual(provider.sourceRef, 'source-sha');
         assert.strictEqual(provider.targetRef, 'target-sha');
+        assert.strictEqual(provider.isCheckoutBackedReview, false);
+    });
+
+    test('tracks snapshot diffs that retain a checkout', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), ['a.ts'], [], {
+            mode: 'snapshot', sourceRef: 'source-sha', targetRef: 'target-sha', checkoutBacked: true,
+        });
+
+        assert.strictEqual(provider.isSnapshotReview, true);
+        assert.strictEqual(provider.isCheckoutBackedReview, true);
     });
 });
 

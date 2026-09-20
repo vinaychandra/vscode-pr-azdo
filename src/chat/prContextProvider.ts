@@ -32,6 +32,7 @@ export class PrContextProvider {
     private _reviewMode: 'workingTree' | 'snapshot' = 'workingTree';
     private _sourceRef: string | undefined;
     private _targetRef: string | undefined;
+    private _checkoutBacked = false;
 
     /** Set the active comment context (called when the sparkle button is clicked). */
     setCommentContext(ctx: CommentContext | undefined): void {
@@ -55,7 +56,7 @@ export class PrContextProvider {
         pr: GitPullRequest | undefined,
         changedFilePaths?: string[],
         iterations?: GitPullRequestIteration[],
-        reviewContext?: { mode: 'workingTree' | 'snapshot'; sourceRef?: string; targetRef?: string },
+        reviewContext?: { mode: 'workingTree' | 'snapshot'; sourceRef?: string; targetRef?: string; checkoutBacked?: boolean },
     ): void {
         this._activePr = pr;
         this._changedFilePaths = changedFilePaths ?? [];
@@ -63,6 +64,7 @@ export class PrContextProvider {
         this._reviewMode = reviewContext?.mode ?? 'workingTree';
         this._sourceRef = reviewContext?.sourceRef;
         this._targetRef = reviewContext?.targetRef;
+        this._checkoutBacked = reviewContext?.mode === 'workingTree' || !!reviewContext?.checkoutBacked;
     }
 
     get activePr(): GitPullRequest | undefined {
@@ -79,6 +81,10 @@ export class PrContextProvider {
 
     get isSnapshotReview(): boolean {
         return this._reviewMode === 'snapshot';
+    }
+
+    get isCheckoutBackedReview(): boolean {
+        return this._checkoutBacked;
     }
 
     get sourceRef(): string | undefined {

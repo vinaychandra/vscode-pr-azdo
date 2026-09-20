@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { appendAutoRoutingPrompt, buildReviewDiffArgs, parseReviewArguments } from '../../chat/prChatParticipant';
+import { appendAutoRoutingPrompt, buildReviewDiffArgs, parseReviewArguments, requiresCheckoutForAi } from '../../chat/prChatParticipant';
 import { BUILT_IN_REVIEW_LENSES, buildReviewChatQuery, buildReviewPrompt } from '../../chat/reviewLenses';
 
 suite('appendAutoRoutingPrompt', () => {
@@ -23,6 +23,16 @@ suite('appendAutoRoutingPrompt', () => {
         assert.ok(lastMessage.content.some(part =>
             part instanceof vscode.LanguageModelTextPart && part.value.trim().length > 0,
         ));
+    });
+});
+
+suite('requiresCheckoutForAi', () => {
+    test('blocks fix and PR review commands but allows read-only explanation', () => {
+        assert.strictEqual(requiresCheckoutForAi('fix'), true);
+        assert.strictEqual(requiresCheckoutForAi('review'), true);
+        assert.strictEqual(requiresCheckoutForAi('review-quick'), true);
+        assert.strictEqual(requiresCheckoutForAi('explain'), false);
+        assert.strictEqual(requiresCheckoutForAi(undefined), false);
     });
 });
 

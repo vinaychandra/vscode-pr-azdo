@@ -17,7 +17,7 @@ import { computeRelativePath, extractPathFromGitRefUri, getSnapshotPathFromDiffI
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
+import { AI_CHECKOUT_REQUIRED_MESSAGE, registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, fetchPullRequestSnapshot, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
@@ -151,6 +151,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		externalPrService?: PullRequestService;
 		externalRemoteInfo?: ParsedAzDoRemote;
 		ownsApiClient?: boolean;
+		checkoutBacked?: boolean;
 	}
 	let pinnedSnapshotReview: PinnedSnapshotReview | undefined;
 
@@ -334,6 +335,15 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	function ensureCheckoutForAi(): boolean {
+		const reviewContext = activePrProvider?.reviewContext;
+		if (reviewContext?.mode === 'snapshot' && !reviewContext.checkoutBacked) {
+			vscode.window.showErrorMessage(AI_CHECKOUT_REQUIRED_MESSAGE);
+			return false;
+		}
+		return true;
+	}
+
 	async function pinPullRequestSnapshot(
 		pr: GitPullRequest,
 		external?: {
@@ -453,6 +463,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		iterationId?: number,
 		compareToIterationId = 0,
 		ownsApiClient = false,
+		checkoutBacked = false,
 	): Promise<boolean> {
 		if (!pr.pullRequestId) {
 			vscode.window.showWarningMessage('Pull request information is unavailable.');
@@ -480,6 +491,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				externalPrService,
 				externalRemoteInfo,
 				ownsApiClient,
+				checkoutBacked,
 			};
 			if (previousExternalClient && previousExternalClient !== externalApiClient) {
 				previousExternalClient.dispose();
@@ -501,6 +513,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					latestIterationId: snapshot.latestIterationId,
 					iterationId: snapshot.iterationId,
 					compareToIterationId: snapshot.compareToIterationId,
+					checkoutBacked,
 				},
 			);
 			if (!reviewMode) {
@@ -659,6 +672,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					range.iterationId,
 					range.compareToIterationId,
 					pinned?.ownsApiClient ?? false,
+					pinned?.checkoutBacked ?? provider.reviewContext?.mode === 'workingTree',
 				);
 				if (opened) {
 					await refreshOpenSnapshotDiff(originalTab, openSnapshotPath, cursorLine);
@@ -939,6 +953,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					latestIterationId: pinnedSnapshotReview.latestIterationId,
 					iterationId: pinnedSnapshotReview.iterationId,
 					compareToIterationId: pinnedSnapshotReview.compareToIterationId ?? 0,
+					checkoutBacked: pinnedSnapshotReview.checkoutBacked,
 				} : undefined,
 			);
 		} else if (providerAfterRebuild && pinnedSnapshotReview?.repoRoot && activeRepoRoot && areSamePaths(pinnedSnapshotReview.repoRoot, activeRepoRoot)) {
@@ -951,6 +966,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					latestIterationId: pinnedSnapshotReview.latestIterationId,
 					iterationId: pinnedSnapshotReview.iterationId,
 					compareToIterationId: pinnedSnapshotReview.compareToIterationId ?? 0,
+					checkoutBacked: pinnedSnapshotReview.checkoutBacked,
 				} : undefined,
 			);
 		}
@@ -1096,6 +1112,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						pinned.iterationId,
 						pinned.compareToIterationId ?? 0,
 						pinned.ownsApiClient ?? false,
+						pinned.checkoutBacked ?? false,
 					);
 					return;
 				}
@@ -1625,6 +1642,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- AI: Resolve with Copilot button ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.resolveWithAI', async (threadOrItem: unknown) => {
+			if (!ensureCheckoutForAi()) { return; }
 			// Resolve the vscode.CommentThread from the argument
 			let vsThread: vscode.CommentThread | undefined;
 			const arg = threadOrItem as any;
@@ -1729,10 +1747,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- AI: Apply suggestion via Copilot Edits ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.applySuggestion', async () => {
-			if (activePrProvider?.isSnapshotReview) {
-				vscode.window.showInformationMessage('Check out the pull request in the current repository or a review worktree before applying suggestions.');
-				return;
-			}
+			if (!ensureCheckoutForAi()) { return; }
 			outputChannel.appendLine('[ai] Opening Copilot Edits to apply suggestion');
 			await vscode.commands.executeCommand('workbench.action.chat.open', {
 				query: 'Apply the suggestion',
@@ -1743,6 +1758,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// --- AI: Review PR from sidebar button ---
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
+			if (!ensureCheckoutForAi()) { return; }
 			const lens = await reviewLensService.chooseLens();
 			if (!lens) {
 				outputChannel.appendLine('[ai] reviewWithAI: user cancelled lens selection');

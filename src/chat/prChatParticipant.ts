@@ -6,6 +6,12 @@ import { hasSuggestion, extractSuggestion } from '../views/suggestionRenderer';
 import { CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
+
+export const AI_CHECKOUT_REQUIRED_MESSAGE = 'AI reviews and fixes require a checked-out pull request. Check out the pull request in the current repository or a review worktree, then try again.';
+
+export function requiresCheckoutForAi(command: string | undefined): boolean {
+    return command === 'fix' || command === 'review' || command === 'review-quick';
+}
 import { getActiveRepository } from '../git/gitExtension';
 import { type ReviewMode, buildGitDiffArgs, reviewModeLabel } from '../git/gitStateDetector';
 import { buildGitRefUri } from '../views/gitRefContentProvider';
@@ -147,6 +153,13 @@ export function registerPrChatParticipant(
     }
     const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token) => {
         log.appendLine(`[chat] @azdo-pr invoked: command=${request.command ?? '(none)'}, prompt="${request.prompt.substring(0, 80)}"`);
+
+        if (contextProvider.isSnapshotReview
+            && !contextProvider.isCheckoutBackedReview
+            && requiresCheckoutForAi(request.command)) {
+            stream.markdown(AI_CHECKOUT_REQUIRED_MESSAGE);
+            return { errorDetails: { message: AI_CHECKOUT_REQUIRED_MESSAGE } };
+        }
 
         // Route to review handler
         if (request.command === 'review' || request.command === 'review-quick') {
