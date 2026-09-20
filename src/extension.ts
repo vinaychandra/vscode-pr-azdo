@@ -24,7 +24,7 @@ import { reviewedFilesStateKey } from './views/reviewState';
 import { chooseCheckoutMode } from './views/checkoutMode';
 import { DraftPersistenceManager } from './views/draftPersistence';
 import { BUILT_IN_REVIEW_LENSES, REVIEW_PROTOCOL_PROMPT, ReviewLensService, buildReviewChatQuery } from './chat/reviewLenses';
-import type { AzDoRemoteInfo } from './azdo/remoteInfo';
+import type { ParsedAzDoRemote } from './azdo/remoteInfo';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
 const REVIEW_WORKTREE_OPEN_KEY = 'reviewWorktreeOpenPath';
@@ -139,12 +139,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		pr: GitPullRequest;
 		sourceRef: string;
 		targetRef: string;
-		repoRoot: string;
+		repoRoot?: string;
 		reviewScope: number | string;
+		apiBacked?: boolean;
+		compareToIterationId?: number;
 		gitRemote?: string;
 		externalApiClient?: AzDoApiClient;
 		externalPrService?: PullRequestService;
-		externalRemoteInfo?: AzDoRemoteInfo;
+		externalRemoteInfo?: ParsedAzDoRemote;
 	}
 	let pinnedSnapshotReview: PinnedSnapshotReview | undefined;
 
@@ -156,7 +158,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		return pinnedSnapshotReview?.externalApiClient ?? apiClient;
 	}
 
-	function getReviewRemoteInfo(): AzDoRemoteInfo | undefined {
+	function getReviewRemoteInfo(): ParsedAzDoRemote | undefined {
 		return pinnedSnapshotReview?.externalRemoteInfo ?? detector.currentRemoteInfo;
 	}
 
@@ -331,7 +333,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			reviewScope: string;
 			apiClient: AzDoApiClient;
 			prService: PullRequestService;
-			remoteInfo: AzDoRemoteInfo;
+			remoteInfo: ParsedAzDoRemote;
 		},
 	): Promise<boolean> {
 		if (!pr.pullRequestId || !pr.sourceRefName || !pr.targetRefName) {
@@ -364,6 +366,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				targetRef: snapshot.targetCommit,
 				repoRoot: repo.rootUri.fsPath,
 				reviewScope: external?.reviewScope ?? pr.pullRequestId!,
+				apiBacked: false,
 				gitRemote: external?.gitRemote,
 				externalApiClient: external?.apiClient,
 				externalPrService: external?.prService,
@@ -372,7 +375,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (previousExternalClient && previousExternalClient !== external?.apiClient) {
 				previousExternalClient.dispose();
 			}
-			gitContentProvider.clearCache();
+			gitContentProvider.setApiContents(undefined);
 			activePrProvider?.pinSnapshotReview(
 				pr,
 				snapshot.sourceCommit,
@@ -396,11 +399,79 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	async function pinApiPullRequestSnapshot(
+		pr: GitPullRequest,
+		reviewScope: string,
+		externalApiClient: AzDoApiClient,
+		externalPrService: PullRequestService,
+		externalRemoteInfo: ParsedAzDoRemote,
+		compareToIterationId?: number,
+	): Promise<boolean> {
+		if (!pr.pullRequestId) {
+			vscode.window.showWarningMessage('Pull request information is unavailable.');
+			return false;
+		}
+
+		try {
+			const snapshot = await vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: `Loading PR #${pr.pullRequestId} content…` },
+				() => externalPrService.getApiReviewSnapshot(pr.pullRequestId!, compareToIterationId),
+			);
+			const previousExternalClient = pinnedSnapshotReview?.externalApiClient;
+			pinnedSnapshotReview = {
+				pr,
+				sourceRef: snapshot.sourceCommit,
+				targetRef: snapshot.comparisonCommit,
+				reviewScope,
+				apiBacked: true,
+				compareToIterationId,
+				externalApiClient,
+				externalPrService,
+				externalRemoteInfo,
+			};
+			if (previousExternalClient && previousExternalClient !== externalApiClient) {
+				previousExternalClient.dispose();
+			}
+			gitContentProvider.setApiContents(snapshot.contents);
+			if (!activePrProvider) {
+				attachActivePrProvider(
+					externalPrService,
+					externalApiClient.getCurrentUserId().catch(() => undefined),
+					() => vscode.window.showInformationMessage('Azure DevOps session expired. Run the URL review command to sign in again.'),
+				);
+			}
+			activePrProvider!.pinSnapshotReview(
+				pr,
+				snapshot.sourceCommit,
+				snapshot.comparisonCommit,
+				externalPrService,
+				{
+					headIterationId: snapshot.headIterationId,
+					compareToIterationId: snapshot.compareToIterationId,
+				},
+			);
+			if (!reviewMode) {
+				reviewMode = true;
+				await context.workspaceState.update('reviewMode', true);
+				applyReviewMode();
+			}
+			outputChannel.appendLine(
+				`[snapshot/api] Pinned PR #${pr.pullRequestId}: iteration ${snapshot.headIterationId}, base ${snapshot.comparisonCommit.substring(0, 12)}..source ${snapshot.sourceCommit.substring(0, 12)}, ${snapshot.changes.length} file(s)`,
+			);
+			return true;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			outputChannel.appendLine(`[snapshot/api] Failed to prepare PR #${pr.pullRequestId}: ${msg}`);
+			vscode.window.showErrorMessage(`Failed to prepare API-backed review: ${msg}`);
+			return false;
+		}
+	}
+
 	function stopPinnedSnapshotReview(): void {
 		if (!pinnedSnapshotReview) { return; }
 		const stoppedReview = pinnedSnapshotReview;
 		pinnedSnapshotReview = undefined;
-		gitContentProvider.clearCache();
+		gitContentProvider.setApiContents(undefined);
 		activePrProvider?.stopSnapshotReview(prService);
 		stoppedReview.externalApiClient?.dispose();
 	}
@@ -447,6 +518,79 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Suppress tree auto-expand during background operations (startup, silent auth)
 	// to prevent the extension panel from stealing focus.
 	let suppressAutoExpand = true;
+
+	function attachActivePrProvider(
+		service: PullRequestService,
+		userIdPromise: Promise<string | undefined>,
+		handleAuthError: () => void,
+	): void {
+		activePrProvider = new ActivePrTreeDataProvider(service, gitApi!, outputChannel, handleAuthError);
+		activePrProvider.setDraftProvider(() => commentController.getDraftSummaries());
+		context.subscriptions.push(activePrProvider);
+
+		let lastExpandedPrId: number | undefined;
+		activePrProviderSub = activePrProvider.onDidChangeTreeData(() => {
+			const hasActivePr = !!activePrProvider?._activePrForContext;
+			void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:hasActivePr', hasActivePr);
+			void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:snapshotReview', !!activePrProvider?.isSnapshotReview);
+			updateReviewModeUi(hasActivePr);
+
+			const prId = activePrProvider?._activePrForContext?.pullRequestId;
+			const reviewScope = prId ? getReviewScope(prId) : undefined;
+			if (prId && activePrProvider!.reviewedFiles.size === 0) {
+				const persisted = context.workspaceState.get<string[]>(reviewedFilesStateKey(reviewScope!));
+				if (persisted && persisted.length > 0) {
+					activePrProvider!.setReviewedFiles(persisted);
+					outputChannel.appendLine(`[reviewed] Restored ${persisted.length} reviewed file(s) for PR #${prId}`);
+				}
+			}
+
+			activePrProxyEmitter.fire();
+			if (prId && prId !== lastExpandedPrId && getReviewApiClient()?.isConnected && !suppressAutoExpand) {
+				lastExpandedPrId = prId;
+				setTimeout(() => {
+					void vscode.commands.executeCommand('vscode-pr-azdo.expandAll');
+				}, 500);
+			}
+		});
+
+		activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
+			void (async () => {
+				const externalApiClient = pinnedSnapshotReview?.externalApiClient;
+				const uid = externalApiClient
+					? await externalApiClient.getCurrentUserId().catch(() => undefined)
+					: await userIdPromise;
+				currentUserId = uid;
+				const pr = activePrProvider?._activePrForContext;
+				const activePrService = getReviewPrService();
+				const reviewContext = activePrProvider?.reviewContext;
+				const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '');
+				const targetRef = reviewContext?.targetRef ?? (targetBranch ? `origin/${targetBranch}` : undefined);
+				commentController.setPrContext(
+					activePrService,
+					pr?.pullRequestId,
+					activePrProvider?.changedFilePaths,
+					currentUserId,
+					activePrProvider?.changeTypes,
+					targetRef,
+					reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined,
+					pr?.pullRequestId ? getReviewScope(pr.pullRequestId) : undefined,
+				);
+				await commentController.updateThreads(activePrProvider?.filteredThreads);
+				if (pr?.pullRequestId !== activePrProvider?._activePrForContext?.pullRequestId) { return; }
+				prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations, reviewContext);
+
+				const reviewScope = pr?.pullRequestId ? getReviewScope(pr.pullRequestId) : undefined;
+				if (reviewScope !== undefined
+					&& vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('persistDraftComments')
+					&& !draftsRestoredForPr.has(reviewScope)) {
+					draftsRestoredForPr.add(reviewScope);
+					const saved = context.workspaceState.get<PersistedDrafts>(`${DRAFT_STATE_KEY}-${reviewScope}`);
+					if (saved) { commentController.restoreDrafts(saved); }
+				}
+			})();
+		});
+	}
 
 	function rebuildApiClient(): void {
 		outputChannel.appendLine('[ext] rebuildApiClient called');
@@ -566,93 +710,20 @@ export async function activate(context: vscode.ExtensionContext) {
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel, handleAuthError);
 			context.subscriptions.push(treeProvider);
 
-			activePrProvider = new ActivePrTreeDataProvider(prService, gitApi!, outputChannel, handleAuthError);
-			activePrProvider.setDraftProvider(() => commentController.getDraftSummaries());
-			context.subscriptions.push(activePrProvider);
-
-			// Forward real provider's change events through stable proxy emitters
-			let lastExpandedPrId: number | undefined;
 			treeProviderSub = treeProvider.onDidChangeTreeData(() => {
 				proxyEmitter.fire();
 			});
-			activePrProviderSub = activePrProvider.onDidChangeTreeData(() => {
-				const hasActivePr = !!activePrProvider?._activePrForContext;
-				void vscode.commands.executeCommand(
-					'setContext', 'vscode-pr-azdo:hasActivePr', hasActivePr,
-				);
-				void vscode.commands.executeCommand(
-					'setContext', 'vscode-pr-azdo:snapshotReview', !!activePrProvider?.isSnapshotReview,
-				);
-				updateReviewModeUi(hasActivePr);
+			attachActivePrProvider(prService, userIdPromise, handleAuthError);
 
-				// Restore persisted reviewed-files state for the newly active PR
-				const prId = activePrProvider?._activePrForContext?.pullRequestId;
-				const reviewScope = prId ? getReviewScope(prId) : undefined;
-				if (prId && activePrProvider!.reviewedFiles.size === 0) {
-					const persisted = context.workspaceState.get<string[]>(reviewedFilesStateKey(reviewScope!));
-					if (persisted && persisted.length > 0) {
-						activePrProvider!.setReviewedFiles(persisted);
-						outputChannel.appendLine(`[reviewed] Restored ${persisted.length} reviewed file(s) for PR #${prId}`);
-					}
-				}
-
-				activePrProxyEmitter.fire();
-
-				// Auto-expand the tree when a new PR becomes active (only if authenticated
-				// and not during a background operation that would steal focus)
-				if (prId && prId !== lastExpandedPrId && getReviewApiClient()?.isConnected && !suppressAutoExpand) {
-					lastExpandedPrId = prId;
-					// Delay slightly to let the tree render before expanding
-					setTimeout(() => {
-						void vscode.commands.executeCommand('vscode-pr-azdo.expandAll');
-					}, 500);
-				}
-			});
-			// Update inline comments only after threads are actually loaded.
-			// Wait for userId to resolve first so own-comment delete buttons appear immediately.
-			activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
-				void (async () => {
-					const externalApiClient = pinnedSnapshotReview?.externalApiClient;
-					const uid = externalApiClient
-						? await externalApiClient.getCurrentUserId().catch(() => undefined)
-						: await userIdPromise;
-					currentUserId = uid;
-					const pr = activePrProvider?._activePrForContext;
-					const activePrService = getReviewPrService();
-					const reviewContext = activePrProvider?.reviewContext;
-					const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '');
-					const targetRef = reviewContext?.targetRef ?? (targetBranch ? `origin/${targetBranch}` : undefined);
-					commentController.setPrContext(
-						activePrService,
-						pr?.pullRequestId,
-						activePrProvider?.changedFilePaths,
-						currentUserId,
-						activePrProvider?.changeTypes,
-						targetRef,
-						reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined,
-						pr?.pullRequestId ? getReviewScope(pr.pullRequestId) : undefined,
-					);
-					await commentController.updateThreads(activePrProvider?.filteredThreads);
-					if (pr?.pullRequestId !== activePrProvider?._activePrForContext?.pullRequestId) {
-						return;
-					}
-					// Keep AI context provider in sync
-					prContextProvider.setActivePr(pr, activePrProvider?.changedFilePaths, activePrProvider?.iterations, reviewContext);
-
-					// Restore persisted drafts once after threads are loaded
-					const reviewScope = pr?.pullRequestId ? getReviewScope(pr.pullRequestId) : undefined;
-					if (reviewScope !== undefined
-						&& vscode.workspace.getConfiguration('vscode-pr-azdo').get<boolean>('persistDraftComments')
-						&& !draftsRestoredForPr.has(reviewScope)) {
-						draftsRestoredForPr.add(reviewScope);
-						const saved = context.workspaceState.get<PersistedDrafts>(`${DRAFT_STATE_KEY}-${reviewScope}`);
-						if (saved) {
-							commentController.restoreDrafts(saved);
-						}
-					}
-				})();
-			});
-
+		} else if (pinnedSnapshotReview?.apiBacked
+			&& pinnedSnapshotReview.externalApiClient
+			&& pinnedSnapshotReview.externalPrService) {
+			outputChannel.appendLine('[ext] Restoring API-backed review without a local repository');
+			attachActivePrProvider(
+				pinnedSnapshotReview.externalPrService,
+				pinnedSnapshotReview.externalApiClient.getCurrentUserId().catch(() => undefined),
+				() => vscode.window.showInformationMessage('Azure DevOps session expired. Refresh the active pull request to sign in again.'),
+			);
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
 		}
@@ -667,8 +738,16 @@ export async function activate(context: vscode.ExtensionContext) {
 		applyReviewMode();
 
 		const activeRepoRoot = getActiveRepository(gitApi, detector)?.rootUri.fsPath;
-		if (activePrProvider && pinnedSnapshotReview && activeRepoRoot && areSamePaths(pinnedSnapshotReview.repoRoot, activeRepoRoot)) {
-			activePrProvider.pinSnapshotReview(
+		const providerAfterRebuild = activePrProvider as ActivePrTreeDataProvider | undefined;
+		if (providerAfterRebuild && pinnedSnapshotReview?.apiBacked) {
+			providerAfterRebuild.pinSnapshotReview(
+				pinnedSnapshotReview.pr,
+				pinnedSnapshotReview.sourceRef,
+				pinnedSnapshotReview.targetRef,
+				pinnedSnapshotReview.externalPrService,
+			);
+		} else if (providerAfterRebuild && pinnedSnapshotReview?.repoRoot && activeRepoRoot && areSamePaths(pinnedSnapshotReview.repoRoot, activeRepoRoot)) {
+			providerAfterRebuild.pinSnapshotReview(
 				pinnedSnapshotReview.pr,
 				pinnedSnapshotReview.sourceRef,
 				pinnedSnapshotReview.targetRef,
@@ -807,6 +886,17 @@ export async function activate(context: vscode.ExtensionContext) {
 			suppressAutoExpand = false;
 			if (pinnedSnapshotReview) {
 				const pinned = pinnedSnapshotReview;
+				if (pinned.apiBacked && pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo && typeof pinned.reviewScope === 'string') {
+					await pinApiPullRequestSnapshot(
+						pinned.pr,
+						pinned.reviewScope,
+						pinned.externalApiClient,
+						pinned.externalPrService,
+						pinned.externalRemoteInfo,
+						pinned.compareToIterationId,
+					);
+					return;
+				}
 				const external = pinned.externalApiClient && pinned.externalPrService && pinned.externalRemoteInfo && pinned.gitRemote && typeof pinned.reviewScope === 'string'
 					? {
 						gitRemote: pinned.gitRemote,
@@ -883,7 +973,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			const targetRef = reviewContext?.targetRef ?? `origin/${targetBranch}`;
 			const sourceRef = reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined;
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
-			if (!repoRoot) {
+			if (!repoRoot && !sourceRef) {
 				outputChannel.appendLine('[toggle] Cannot toggle: repository root not found.');
 				return;
 			}
@@ -917,7 +1007,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				const relative = computeRelativePath(diffFileUri, repoRoot);
+				const relative = repoRoot ? computeRelativePath(diffFileUri, repoRoot) : undefined;
 				if (!relative) {
 					outputChannel.appendLine(`[toggle] Cannot resolve diff file under repository root: ${diffFileUri.path}`);
 					return;
@@ -941,14 +1031,14 @@ export async function activate(context: vscode.ExtensionContext) {
 				outputChannel.appendLine(`[toggle] Opened workspace file for ${relative}.`);
 			} else if (uri.scheme === 'file') {
 				// File → Diff: compute relative path, look up change type, open diff
-				const relative = computeRelativePath(uri, repoRoot);
+				const relative = repoRoot ? computeRelativePath(uri, repoRoot) : undefined;
 				if (!relative) {
 					outputChannel.appendLine(`[toggle] Cannot resolve active file under repository root: ${uri.path}`);
 					return;
 				}
 
 				const changeType = activePrProvider?.getChangeType(relative) ?? VersionControlChangeType.Edit;
-				const diff = buildDiffParams(relative, changeType, repoRoot, targetRef, targetBranch, sourceRef, sourceBranch);
+				const diff = buildDiffParams(relative, changeType, repoRoot!, targetRef, targetBranch, sourceRef, sourceBranch);
 
 				outputChannel.appendLine(`[toggle] File → Diff for ${relative}`);
 				await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
@@ -967,7 +1057,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					const path = extractPathFromGitRefUri(uri);
 					if (!path) { return; }
 					const changeType = activePrProvider?.getChangeType(path) ?? VersionControlChangeType.Edit;
-					const diff = buildDiffParams(path, changeType, repoRoot, targetRef, targetBranch, sourceRef, sourceBranch);
+					const diff = buildDiffParams(path, changeType, repoRoot ?? vscode.Uri.file('/'), targetRef, targetBranch, sourceRef, sourceBranch);
 					await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
 					return;
 				}
@@ -987,7 +1077,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 
 				outputChannel.appendLine(`[toggle] Diff → File for ${path}`);
-				const fileUri = vscode.Uri.joinPath(repoRoot, path);
+				const fileUri = vscode.Uri.joinPath(repoRoot!, path);
 				const doc = await vscode.workspace.openTextDocument(fileUri);
 				const e = await vscode.window.showTextDocument(doc);
 				const pos = new vscode.Position(cursorLine, 0);
@@ -1027,7 +1117,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
-			if (!repoRoot) { return; }
 
 			const pos = new vscode.Position(Math.max(0, line - 1), 0);
 
@@ -1048,6 +1137,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
 				return;
 			}
+			if (!repoRoot) { return; }
 			if (changeType !== undefined && (changeType & VersionControlChangeType.Delete)) {
 				const pr = activePrProvider?._activePrForContext;
 				const targetBranch = pr?.targetRefName?.replace(/^refs\/heads\//, '') ?? 'main';
@@ -2040,13 +2130,10 @@ export async function activate(context: vscode.ExtensionContext) {
 				const parsed = parseAzDoPullRequestUrl(value);
 				const workspaceRemoteInfo = detector.currentRemoteInfo;
 				const repo = getActiveRepository(gitApi, detector);
-				if (!parsed || !workspaceRemoteInfo || !repo || !prService) {
-					vscode.window.showWarningMessage('Open a local Azure DevOps repository before reviewing a pull request URL.');
-					return;
-				}
+				if (!parsed) { return; }
 
 				suppressAutoExpand = false;
-				if (isSameAzDoRepository(parsed, workspaceRemoteInfo)) {
+				if (workspaceRemoteInfo && repo && prService && isSameAzDoRepository(parsed, workspaceRemoteInfo)) {
 					try {
 						const pr = await vscode.window.withProgress(
 							{ location: vscode.ProgressLocation.Notification, title: `Loading pull request #${parsed.pullRequestId}…` },
@@ -2059,14 +2146,13 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				const externalRemoteInfo: AzDoRemoteInfo = {
+				const externalRemoteInfo: ParsedAzDoRemote = {
 					organization: parsed.organization,
 					project: parsed.project,
 					repositoryName: parsed.repositoryName,
 					remoteUrl: parsed.repositoryUrl,
 					remoteName: parsed.repositoryUrl,
 					apiBaseUrl: `https://dev.azure.com/${encodeURIComponent(parsed.organization)}`,
-					repository: repo,
 				};
 				const externalApiClient = new AzDoApiClient(authProvider, externalRemoteInfo, outputChannel, tenantCache);
 				const externalPrService = new PullRequestService(externalApiClient, externalRemoteInfo);
@@ -2075,13 +2161,13 @@ export async function activate(context: vscode.ExtensionContext) {
 						{ location: vscode.ProgressLocation.Notification, title: `Loading ${parsed.repositoryName} PR #${parsed.pullRequestId}…` },
 						() => externalPrService.getPullRequest(parsed.pullRequestId),
 					);
-					const opened = await pinPullRequestSnapshot(pr, {
-						gitRemote: parsed.repositoryUrl,
-						reviewScope: externalReviewScope(parsed),
-						apiClient: externalApiClient,
-						prService: externalPrService,
-						remoteInfo: externalRemoteInfo,
-					});
+					const opened = await pinApiPullRequestSnapshot(
+						pr,
+						externalReviewScope(parsed),
+						externalApiClient,
+						externalPrService,
+						externalRemoteInfo,
+					);
 					if (!opened) {
 						externalApiClient.dispose();
 						return;
@@ -2111,7 +2197,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			const targetRef = reviewContext?.targetRef ?? `origin/${targetBranch}`;
 			const sourceRef = reviewContext?.mode === 'snapshot' ? reviewContext.sourceRef : undefined;
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
-			if (!repoRoot) { return; }
+			if (!repoRoot && !sourceRef) { return; }
 
 			const filePath = item.filePath;
 			const changeType = item.changeType;
@@ -2129,7 +2215,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			outputChannel.appendLine(`[diff] Opening diff for ${filePath} (${item.description}) against ${targetRef}`);
 
-			const diff = buildDiffParams(filePath, changeType, repoRoot, targetRef, targetBranch, sourceRef, sourceBranch);
+			const diff = buildDiffParams(filePath, changeType, repoRoot ?? vscode.Uri.file('/'), targetRef, targetBranch, sourceRef, sourceBranch);
 			await vscode.commands.executeCommand('vscode.diff', diff.leftUri, diff.rightUri, diff.title);
 		}),
 	);

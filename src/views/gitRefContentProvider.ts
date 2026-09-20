@@ -3,6 +3,7 @@ import { execFile } from 'child_process';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
+import { fileContentKey } from '../azdo/prService';
 
 /**
  * URI scheme for showing file content at a specific git ref.
@@ -21,6 +22,7 @@ export const GIT_CONTENT_SCHEME = 'azdo-pr-git';
  */
 export class GitRefContentProvider implements vscode.TextDocumentContentProvider {
     private _cache = new Map<string, string>();
+    private _apiContents: ReadonlyMap<string, string> | undefined;
 
     constructor(
         private readonly log: vscode.OutputChannel,
@@ -44,6 +46,11 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
 
         const params = new URLSearchParams(uri.query);
         const ref = params.get('ref') ?? 'HEAD';
+        const apiContent = this._apiContents?.get(fileContentKey(ref, filePath));
+        if (apiContent !== undefined) {
+            this._cache.set(cacheKey, apiContent);
+            return apiContent;
+        }
 
         const repoRoot = (this.detector ? getActiveRepository(this.gitApi, this.detector) : this.gitApi?.repositories[0])?.rootUri.fsPath
             ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -70,6 +77,12 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
     /** Clear cache (e.g. after a fetch or branch switch). */
     clearCache(): void {
         this._cache.clear();
+    }
+
+    /** Set the immutable file contents for an API-backed review snapshot. */
+    setApiContents(contents: ReadonlyMap<string, string> | undefined): void {
+        this._apiContents = contents;
+        this.clearCache();
     }
 }
 

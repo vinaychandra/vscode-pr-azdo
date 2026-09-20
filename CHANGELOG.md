@@ -6,6 +6,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- **Repository-free URL reviews** — open pull requests from an empty VS Code window without cloning or checking out the repository. Changed paths and revisions are resolved in one Azure DevOps batch request, then their unique blobs are downloaded in one ZIP request.
+
+### Fixed
+
+- **No-checkout reviews now show the pull request's actual changes** — snapshot diffs compare the source commit with its merge base instead of the latest target commit, preventing unrelated target-branch updates from appearing as reversed or incorrect changes.
+- **Comments in repository-free reviews** — existing threads now appear inline on virtual diff documents, and the editor gutter exposes the control for adding new comments without requiring a workspace root.
+
 ## [0.0.15]
 
 ### Added

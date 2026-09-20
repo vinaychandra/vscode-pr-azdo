@@ -1,8 +1,37 @@
-import type { GitPullRequest, GitCommitRef, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { PullRequestStatus, CommentThreadStatus, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import JSZip = require('jszip');
+import type { GitPullRequest, GitCommitRef, GitPullRequestChange, GitPullRequestIteration, GitPullRequestIterationChanges, GitPullRequestCommentThread, Comment as AzDoComment } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { PullRequestStatus, CommentThreadStatus, CommentType, GitVersionType, VersionControlChangeType, VersionControlRecursionType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { IGitApi } from 'azure-devops-node-api/GitApi';
 import type { AzDoApiClient } from './apiClient';
-import type { AzDoRemoteInfo } from './remoteInfo';
+import type { ParsedAzDoRemote } from './remoteInfo';
+
+export interface FileContentRequest {
+    path: string;
+    commitId: string;
+}
+
+export interface ApiPullRequestSnapshot {
+    iterations: GitPullRequestIteration[];
+    headIterationId: number;
+    compareToIterationId?: number;
+    sourceCommit: string;
+    targetCommit: string;
+    comparisonCommit: string;
+    changes: GitPullRequestChange[];
+    contents: ReadonlyMap<string, string>;
+}
+
+export function fileContentKey(commitId: string, filePath: string): string {
+    return `${commitId}:${filePath.replace(/^\//, '')}`;
+}
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+}
 
 /**
  * Fetches pull request data from Azure DevOps.
@@ -10,7 +39,7 @@ import type { AzDoRemoteInfo } from './remoteInfo';
 export class PullRequestService {
     constructor(
         private readonly apiClient: AzDoApiClient,
-        private readonly remoteInfo: AzDoRemoteInfo,
+        private readonly remoteInfo: ParsedAzDoRemote,
     ) { }
 
     /** Whether the underlying API client has an active authenticated connection. */
@@ -38,6 +67,62 @@ export class PullRequestService {
             pullRequestId,
             this.remoteInfo.project,
         ));
+    }
+
+    /** Resolve many file versions at once, then download all unique blobs in one ZIP response. */
+    async getFileContents(requests: readonly FileContentRequest[]): Promise<Map<string, string>> {
+        if (requests.length === 0) {
+            return new Map();
+        }
+
+        return this.withGitApi(async git => {
+            const uniqueRequests = [...new Map(requests.map(request => [
+                fileContentKey(request.commitId, request.path),
+                request,
+            ])).values()];
+            const itemGroups = await git.getItemsBatch({
+                itemDescriptors: uniqueRequests.map(request => ({
+                    path: `/${request.path.replace(/^\//, '')}`,
+                    version: request.commitId,
+                    versionType: GitVersionType.Commit,
+                    recursionLevel: VersionControlRecursionType.None,
+                })),
+            }, this.remoteInfo.repositoryName, this.remoteInfo.project);
+
+            const objectIds = [...new Set(itemGroups
+                .map(items => items[0]?.objectId)
+                .filter((objectId): objectId is string => !!objectId))];
+            const contentByObjectId = new Map<string, string>();
+            if (objectIds.length > 0) {
+                const archive = await streamToBuffer(await git.getBlobsZip(
+                    objectIds,
+                    this.remoteInfo.repositoryName,
+                    this.remoteInfo.project,
+                ));
+                const zip = await JSZip.loadAsync(archive);
+                const entries = Object.values(zip.files).filter(entry => !entry.dir);
+                for (const [index, objectId] of objectIds.entries()) {
+                    const normalizedId = objectId.toLowerCase();
+                    const entry = entries.find(candidate => {
+                        const fileName = candidate.name.split('/').pop()?.toLowerCase();
+                        return fileName === normalizedId || candidate.name.toLowerCase().includes(normalizedId);
+                    }) ?? (entries.length === objectIds.length ? entries[index] : undefined);
+                    if (entry) {
+                        contentByObjectId.set(objectId, await entry.async('string'));
+                    }
+                }
+            }
+
+            const result = new Map<string, string>();
+            uniqueRequests.forEach((request, index) => {
+                const objectId = itemGroups[index]?.[0]?.objectId;
+                result.set(
+                    fileContentKey(request.commitId, request.path),
+                    objectId ? contentByObjectId.get(objectId) ?? '' : '',
+                );
+            });
+            return result;
+        });
     }
 
     /** Active pull requests created by the given user. */
@@ -123,13 +208,85 @@ export class PullRequestService {
     }
 
     /** Get file changes for a specific iteration of a pull request. */
-    async getPrIterationChanges(pullRequestId: number, iterationId: number): Promise<GitPullRequestIterationChanges> {
-        return this.withGitApi(git => git.getPullRequestIterationChanges(
-            this.remoteInfo.repositoryName,
-            pullRequestId,
-            iterationId,
-            this.remoteInfo.project,
-        ));
+    async getPrIterationChanges(pullRequestId: number, iterationId: number, compareTo?: number): Promise<GitPullRequestIterationChanges> {
+        return this.withGitApi(async git => {
+            const changeEntries: GitPullRequestChange[] = [];
+            let skip: number | undefined;
+            let nextTop: number | undefined;
+            do {
+                const page = await git.getPullRequestIterationChanges(
+                    this.remoteInfo.repositoryName,
+                    pullRequestId,
+                    iterationId,
+                    this.remoteInfo.project,
+                    nextTop,
+                    skip,
+                    compareTo,
+                );
+                changeEntries.push(...(page.changeEntries ?? []));
+                skip = page.nextSkip && page.nextSkip > 0 ? page.nextSkip : undefined;
+                nextTop = page.nextTop && page.nextTop > 0 ? page.nextTop : undefined;
+            } while (skip !== undefined);
+            return { changeEntries };
+        });
+    }
+
+    /** Build immutable content for the latest PR head against its merge base or a selected iteration. */
+    async getApiReviewSnapshot(pullRequestId: number, compareToIterationId?: number): Promise<ApiPullRequestSnapshot> {
+        const iterations = await this.getPrIterations(pullRequestId);
+        const head = iterations[iterations.length - 1];
+        const headIterationId = head?.id;
+        const sourceCommit = head?.sourceRefCommit?.commitId;
+        const targetCommit = head?.targetRefCommit?.commitId;
+        const selectedIteration = compareToIterationId === undefined
+            ? undefined
+            : iterations.find(iteration => iteration.id === compareToIterationId);
+        const comparisonCommit = selectedIteration?.sourceRefCommit?.commitId
+            ?? head?.commonRefCommit?.commitId;
+        if (!headIterationId || !sourceCommit || !targetCommit || !comparisonCommit) {
+            throw new Error('Azure DevOps did not return complete commit information for the pull request iterations.');
+        }
+        if (compareToIterationId !== undefined && !selectedIteration) {
+            throw new Error(`Pull request iteration ${compareToIterationId} was not found.`);
+        }
+
+        const changeResult = await this.getPrIterationChanges(pullRequestId, headIterationId, compareToIterationId);
+        const changes = (changeResult.changeEntries ?? []) as GitPullRequestChange[];
+        const requests: FileContentRequest[] = [];
+        for (const change of changes) {
+            const changeType = (change as { changeType?: number }).changeType ?? 0;
+            const sourcePath = change.item?.path?.replace(/^\//, '');
+            const comparisonPath = ((change as { originalPath?: string }).originalPath ?? change.item?.path)?.replace(/^\//, '');
+            if (sourcePath && !(changeType & VersionControlChangeType.Delete)) {
+                requests.push({ path: sourcePath, commitId: sourceCommit });
+            }
+            if (comparisonPath && !(changeType & VersionControlChangeType.Add)) {
+                requests.push({ path: comparisonPath, commitId: comparisonCommit });
+            }
+        }
+        const downloadedContents = await this.getFileContents(requests);
+        const contents = new Map(downloadedContents);
+        for (const change of changes) {
+            const currentPath = change.item?.path?.replace(/^\//, '');
+            const originalPath = (change as { originalPath?: string }).originalPath?.replace(/^\//, '');
+            if (currentPath && originalPath && currentPath !== originalPath) {
+                const originalContent = downloadedContents.get(fileContentKey(comparisonCommit, originalPath));
+                if (originalContent !== undefined) {
+                    contents.set(fileContentKey(comparisonCommit, currentPath), originalContent);
+                }
+            }
+        }
+
+        return {
+            iterations,
+            headIterationId,
+            compareToIterationId,
+            sourceCommit,
+            targetCommit,
+            comparisonCommit,
+            changes,
+            contents,
+        };
     }
 
     /** Get commits for a pull request. */

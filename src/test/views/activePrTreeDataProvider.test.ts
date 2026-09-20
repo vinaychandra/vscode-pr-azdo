@@ -1242,7 +1242,10 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         await new Promise(resolve => setTimeout(resolve, 0));
 
         const snapshotPr = { pullRequestId: 42, title: 'Snapshot review' } as GitPullRequest;
-        provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha');
+        provider.pinSnapshotReview(snapshotPr, 'source-sha', 'target-sha', undefined, {
+            headIterationId: 3,
+            compareToIterationId: 1,
+        });
         const callsBeforeBranchChange = findCalls;
         harness.setBranch('local/other');
         harness.setCommit('other-commit');
@@ -1253,6 +1256,8 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         assert.strictEqual(provider.reviewContext?.mode, 'snapshot');
         assert.strictEqual(provider.reviewContext?.sourceRef, 'source-sha');
         assert.strictEqual(provider.reviewContext?.targetRef, 'target-sha');
+        assert.strictEqual(provider.reviewContext?.headIterationId, 3);
+        assert.strictEqual(provider.reviewContext?.compareToIterationId, 1);
         assert.strictEqual(findCalls, callsBeforeBranchChange);
 
         provider.dispose();

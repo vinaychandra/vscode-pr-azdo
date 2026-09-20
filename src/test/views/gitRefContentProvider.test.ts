@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { fileContentKey } from '../../azdo/prService';
 import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from '../../views/gitRefContentProvider';
 
 function createMockLog(): vscode.OutputChannel {
@@ -64,6 +65,32 @@ suite('GitRefContentProvider', () => {
         // Should not throw after clearing
         const content = await provider.provideTextDocumentContent(uri, new vscode.CancellationTokenSource().token);
         assert.strictEqual(content, '');
+    });
+
+    test('serves API snapshot content without a local repository', async () => {
+        const provider = new GitRefContentProvider(createMockLog());
+        provider.setApiContents(new Map([
+            [fileContentKey('source-sha', 'src/app.ts'), 'API source content'],
+        ]));
+
+        const content = await provider.provideTextDocumentContent(
+            buildGitRefUri('src/app.ts', 'source-sha'),
+            new vscode.CancellationTokenSource().token,
+        );
+
+        assert.strictEqual(content, 'API source content');
+    });
+
+    test('replacing API snapshot content invalidates the document cache', async () => {
+        const provider = new GitRefContentProvider(createMockLog());
+        const uri = buildGitRefUri('src/app.ts', 'source-sha');
+        provider.setApiContents(new Map([[fileContentKey('source-sha', 'src/app.ts'), 'first']]));
+        await provider.provideTextDocumentContent(uri, new vscode.CancellationTokenSource().token);
+
+        provider.setApiContents(new Map([[fileContentKey('source-sha', 'src/app.ts'), 'second']]));
+        const content = await provider.provideTextDocumentContent(uri, new vscode.CancellationTokenSource().token);
+
+        assert.strictEqual(content, 'second');
     });
 });
 

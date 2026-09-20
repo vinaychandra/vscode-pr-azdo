@@ -35,6 +35,8 @@ Choose **Review Without Checkout** from the **Review Pull Request** picker to re
 
 Git object data and refs under `.git` are updated by the fetch. The selected no-checkout review is not restored after reloading VS Code.
 
+You can also run **Review Pull Request from URL** without opening a folder or cloning the repository. For repository-free and external-repository reviews, the extension retrieves only the pull request's changed paths and selected source/comparison revisions through Azure DevOps APIs. It resolves all file versions in one batch request and downloads their unique blobs in one ZIP request; repository size does not affect the number of files downloaded.
+
 ### Inline Comments
 
 - Comments appear as inline annotations on the exact lines they reference

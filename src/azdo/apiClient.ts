@@ -4,7 +4,7 @@ import type { IGitApi } from 'azure-devops-node-api/GitApi';
 import type { ICoreApi } from 'azure-devops-node-api/CoreApi';
 import type { ConnectionData } from 'azure-devops-node-api/interfaces/LocationsInterfaces';
 import type { IAuthProvider } from './auth/iAuthProvider';
-import type { AzDoRemoteInfo } from './remoteInfo';
+import type { ParsedAzDoRemote } from './remoteInfo';
 import { discoverOrgTenantId } from './auth/tenantDiscovery';
 
 /** Error subclass surfaced when the current token cannot access the target org. */
@@ -48,7 +48,7 @@ export class AzDoApiClient implements vscode.Disposable {
 
     constructor(
         private readonly authProvider: IAuthProvider,
-        private readonly remoteInfo: AzDoRemoteInfo,
+        private readonly remoteInfo: ParsedAzDoRemote,
         private readonly log: vscode.OutputChannel,
         private readonly tenantCache?: {
             get(org: string): string | undefined;

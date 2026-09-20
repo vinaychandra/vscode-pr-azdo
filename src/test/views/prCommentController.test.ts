@@ -1448,6 +1448,54 @@ suite('Deleted files: comment thread anchoring', () => {
         detector.dispose();
     });
 
+    test('repository-free snapshot threads anchor to the source commit URI', async () => {
+        const api = makeGitApi([]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            'target-sha', 'source-sha',
+        );
+
+        await controller.updateThreads([makeThread({ id: 203 })]);
+
+        const vsThread = controller.findThreadByAzdoId(203);
+        assert.ok(vsThread, 'thread should be created without a workspace root');
+        assert.strictEqual(vsThread!.uri.scheme, GIT_CONTENT_SCHEME);
+        assert.strictEqual(new URLSearchParams(vsThread!.uri.query).get('ref'), 'source-sha');
+
+        controller.dispose();
+        detector.dispose();
+    });
+
+    test('repository-free snapshot documents expose ranges for new comments', async () => {
+        const api = makeGitApi([]);
+        const detector = new RepositoryDetector(api, createMockLog());
+        const controller = new PrCommentController(createMockLog(), api, detector);
+        controller.setReviewMode(true);
+        controller.setPrContext(
+            {} as any, 42, ['src/index.ts'], undefined,
+            new Map([['src/index.ts', VersionControlChangeType.Edit]]),
+            'target-sha', 'source-sha',
+        );
+        const provider = (controller as any)._controller.commentingRangeProvider;
+        const document = {
+            uri: vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///src/index.ts?ref=source-sha`),
+            lineCount: 12,
+        } as vscode.TextDocument;
+
+        const ranges = await provider.provideCommentingRanges(document, new vscode.CancellationTokenSource().token);
+
+        assert.strictEqual(ranges.length, 1);
+        assert.strictEqual(ranges[0].start.line, 0);
+        assert.strictEqual(ranges[0].end.line, 11);
+
+        controller.dispose();
+        detector.dispose();
+    });
+
     test('deleted-file thread falls back to file URI when target ref is unknown', async () => {
         const repo = makeRepo([makeRemote('origin', AZDO_REMOTE)], REPO_ROOT);
         const api = makeGitApi([repo]);

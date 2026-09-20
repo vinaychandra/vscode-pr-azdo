@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestAsyncStatus, PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { AzDoApiClient } from '../azdo/apiClient';
-import type { AzDoRemoteInfo, ParsedAzDoRemote } from '../azdo/remoteInfo';
+import type { ParsedAzDoRemote } from '../azdo/remoteInfo';
 
 /** Messages sent from webview → extension. */
 interface WebviewMessage {
@@ -23,7 +23,7 @@ export class PrDetailPanel {
         pr: GitPullRequest,
         extensionUri: vscode.Uri,
         apiClient: AzDoApiClient,
-        remoteInfo: AzDoRemoteInfo,
+        remoteInfo: ParsedAzDoRemote,
         log: vscode.OutputChannel,
     ): void {
         const id = pr.pullRequestId!;
@@ -48,7 +48,7 @@ export class PrDetailPanel {
         panel: vscode.WebviewPanel,
         private readonly pr: GitPullRequest,
         private readonly apiClient: AzDoApiClient,
-        private readonly remoteInfo: AzDoRemoteInfo,
+        private readonly remoteInfo: ParsedAzDoRemote,
         private readonly log: vscode.OutputChannel,
     ) {
         this._panel = panel;

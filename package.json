@@ -294,7 +294,7 @@
       "view/title": [
         {
           "command": "vscode-pr-azdo.reviewPullRequestFromUrl",
-          "when": "view == azdo-pr.pullRequests && vscode-pr-azdo:hasAzDoRepo",
+          "when": "view == azdo-pr.pullRequests",
           "group": "navigation@1"
         },
         {
@@ -676,7 +676,8 @@
     "typescript-eslint": "^8.56.1"
   },
   "dependencies": {
-    "azure-devops-node-api": "^15.1.2"
+    "azure-devops-node-api": "^15.1.2",
+    "jszip": "^3.10.2"
   },
   "overrides": {
     "diff": "^8.0.3",

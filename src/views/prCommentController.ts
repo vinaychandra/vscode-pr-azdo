@@ -205,12 +205,11 @@ export class PrCommentController implements vscode.Disposable {
      * Check if a document belongs to the active PR (its file is in the changed files list).
      */
     private isDocumentInPr(document: vscode.TextDocument): boolean {
-        const root = this._workspaceRoot;
-        if (!root) { return false; }
-
         const uri = document.uri;
         // Support both working file:// and azdo-pr-git:// scheme
         if (uri.scheme === 'file') {
+            const root = this._workspaceRoot;
+            if (!root) { return false; }
             const relative = computeRelativePath(uri, root);
             return relative !== undefined && this._prFilePaths.has(relative);
         }
@@ -563,7 +562,8 @@ export class PrCommentController implements vscode.Disposable {
         }
 
         const root = this._workspaceRoot;
-        if (!root) {
+        const hasVirtualSnapshot = !!this._sourceRef || !!this._targetRef;
+        if (!root && !hasVirtualSnapshot) {
             this.log.appendLine('[comments] No workspace root — file-level threads will be skipped');
         }
 
@@ -630,8 +630,8 @@ export class PrCommentController implements vscode.Disposable {
                 continue;
             }
 
-            // File-level threads need a workspace root to resolve paths
-            if (!root) {
+            // Working-copy threads need a root; snapshot threads resolve to virtual ref URIs.
+            if (!root && !hasVirtualSnapshot) {
                 continue;
             }
 

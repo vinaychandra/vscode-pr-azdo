@@ -25,6 +25,8 @@ export interface ActivePrReviewContext {
     mode: 'workingTree' | 'snapshot';
     sourceRef?: string;
     targetRef?: string;
+    headIterationId?: number;
+    compareToIterationId?: number;
 }
 
 /**
@@ -368,6 +370,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         sourceRef: string,
         targetRef: string,
         snapshotPrService?: PullRequestService,
+        iteration?: { headIterationId: number; compareToIterationId?: number },
     ): void {
         this._detectionGeneration++;
         this._lastDetectedBranch = undefined;
@@ -375,7 +378,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
         if (snapshotPrService) {
             this.prService = snapshotPrService;
         }
-        this.setActivePr(pr, { pr, mode: 'snapshot', sourceRef, targetRef }, true);
+        this.setActivePr(pr, { pr, mode: 'snapshot', sourceRef, targetRef, ...iteration }, true);
     }
 
     stopSnapshotReview(workspacePrService?: PullRequestService): void {
@@ -413,7 +416,9 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
             || pr?.pullRequestId !== this._activePr?.pullRequestId
             || nextContext?.mode !== this._reviewContext?.mode
             || nextContext?.sourceRef !== this._reviewContext?.sourceRef
-            || nextContext?.targetRef !== this._reviewContext?.targetRef;
+            || nextContext?.targetRef !== this._reviewContext?.targetRef
+            || nextContext?.headIterationId !== this._reviewContext?.headIterationId
+            || nextContext?.compareToIterationId !== this._reviewContext?.compareToIterationId;
         this._activePr = pr;
         this._reviewContext = nextContext;
         if (changed) {
