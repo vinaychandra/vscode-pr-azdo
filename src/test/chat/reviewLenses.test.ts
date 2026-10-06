@@ -77,6 +77,21 @@ suite('ReviewLensService', () => {
         assert.strictEqual(lens?.builtIn, false);
     });
 
+    test('makes the maintainer lens available without a custom file and keeps General as the default', async () => {
+        const { service, lensFolder } = createService();
+        await service.initialize();
+
+        const lens = await service.resolveLens('project-maintainer-review');
+        const lenses = await service.listLenses();
+
+        assert.ok(lens);
+        assert.strictEqual(lens.name, 'Project Maintainer Review');
+        assert.strictEqual(lens.builtIn, true);
+        assert.ok(lenses.some(available => available.id === lens.id));
+        assert.deepStrictEqual(fs.readdirSync(lensFolder), []);
+        assert.strictEqual((await service.resolveLens(undefined))?.id, 'general');
+    });
+
     test('rejects missing, empty, and unsafe custom lens files', async () => {
         const { service, lensFolder } = createService();
         await service.initialize();
@@ -112,6 +127,7 @@ suite('validateReviewLensName', () => {
 
     test('rejects built-in and custom duplicates case-insensitively', () => {
         assert.match(validateReviewLensName('security') ?? '', /already exists/);
+        assert.match(validateReviewLensName('project maintainer review') ?? '', /already exists/);
         assert.match(validateReviewLensName('reliability', ['Reliability']) ?? '', /already exists/);
     });
 

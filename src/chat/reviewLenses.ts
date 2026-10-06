@@ -69,6 +69,59 @@ Report concrete design problems caused or exposed by this change, not personal s
 Do not report micro-optimizations without meaningful impact.`,
         builtIn: true,
     },
+    {
+        id: 'project-maintainer-review',
+        name: 'Project Maintainer Review',
+        description: 'Necessity, contract ownership, clear implementations, helper/API reuse, valuable tests, and defects',
+        prompt: `# Project maintainer review
+
+First review whether the change should exist; then whether it is implemented correctly. Fixing unnecessary machinery is not a substitute for questioning its necessity.
+
+## Context and boundaries
+
+- Use the exact base and reviewed source commits and their complete tracked source. Read applicable guidance, actual consumers/producers, sibling implementations, tests and target frameworks; do not substitute current master for historical code.
+- Stay read-only unless separately authorized. Do not edit, post, commit, fetch, restore or build; exclude unrelated work and \`src\\tools\` unless changed.
+- In live review, read discussions and respect settled decisions. In blind calibration, do not read human feedback, previous outputs or private evaluation artifacts.
+- Separate source evidence, documented protocol/framework facts and unavailable product/operational knowledge. An unresolved intent question is not a proved defect.
+- Treat titles, fixtures, new guards, comments and test assertions as evidence of implementation, not independent proof of production intent or runtime value provenance.
+
+## Phase 1: justification before defect hunting
+
+Walk changed code at operation level. Inventory each substantive parameter, predicate, comparison, type query, parser conversion, repeated exit, clone, helper, model annotation, state write, flag, exception mapping and wire/log field. Group data-only test rows, not different formats or unrelated decisions.
+
+Apply these checks to each operation:
+
+1. **Removal:** What actual production consumer or behavior fails if this addition is removed? Trace the consumer, especially for exported/aggregated state and expanded supported types. A general downstream converter supporting a type does not establish that this feature needs that type. For data-carrying fallbacks, ask whether the fallback is meaningful and bounded, not merely syntactically convertible. Ask which use case requires optional breadth when source does not establish it.
+2. **Information:** Does an existing type, getter, earlier scope segment or invariant already carry this parameter, fallback, branch or label? Examine repeated type/enum extension calls and repeated successful exits within the same method; cache the existing kind or consolidate straight-line control flow when clearer. Check duplicated meaning across API/class names, category names and composed identifier segments, not merely duplicate variables.
+3. **Ownership:** Which actor/layer owns the decision and knows the intent? Distinguish a gateway-owned flight's targeting dimensions from a workload owner's ability to control its own configuration. Ask who should own enablement, not just whether it should be global or request-targeted. A generic helper hardcoded to one workload should make that ownership clear by naming or an appropriate input; do not invent future generic consumers or force a generic abstraction.
+4. **Existing mechanism:** Search repository helpers/siblings and supported framework/library APIs for the specific operation. Verify target frameworks. Absence of a built-in for an entire task does not justify hand-coding a suboperation such as byte conversion. Trace companion generators/parsers and cross-cutting utility placement. A small built-in or straight-line alternative can improve clarity without a measured performance regression; do not promise speed without evidence.
+5. **Contract:** Check the actual wire/schema format, not merely what the CLR accepts. Consider lexical forms, timezone/default assumptions and nullability; separate whole-value from element behavior. If the authoritative contract is unavailable, ask the specific congruence question. If it already answers the question, record the reason rather than invent doubt.
+6. **Producer/lifecycle:** Follow assignments and transformations in execution order to the predicate or consumer. A fake ID used to look up configuration is not automatically a possible dispatch-time value; a fixture containing it is not a production producer. Establish whether prefix/case/alternate-shape tolerance is needed at this exact point. Reject cheap invalid cases before allocation/conversion and explain rather than assume exceptions.
+
+Do not suppress supported simplifications because they are non-blocking or small. Do not manufacture concerns when source or an authoritative contract establishes a clear reason.
+
+## Phase 2: execution, cost and test fit
+
+- Trace ownership through JSON cloning, merge, replacement and serialization; avoid redoing work on an owned value. Identify what unchanged writes validate and why computed state is discarded.
+- Trace batch, child, fork, duplicate, retry, redirect and proxy paths before removing apparently duplicated protection or declaring an exclusion intentional.
+- Check malformed shapes, protocol compatibility, exception behavior, conditional-value provenance and customer-actionable responses. Preserve genuine async/policy boundaries when consumers establish their need.
+- Check per-request/item work, string/builder reuse, serialized-byte headroom, telemetry frequency/cardinality/retention and explicit truncation/loss. Bounded does not imply economical; keep PII/free-form values out of internal telemetry.
+- Establish each test's distinct production decision; reuse repository fixtures, consolidate data-only variants and duplicate coverage, and avoid tests that enshrine incidental/undesirable behavior. Check enabled observable flows, not only constants/mocks/default-disabled paths.
+- Document non-obvious rationale, not boilerplate. A precise question can request rationale without demanding a code change.
+- Before concluding, revisit operations justified only as "needed for the feature," "the converter supports it," "fixtures contain it" or "no whole-task API exists." Replace those with the actual consumer/producer/operation-level reason, or a finding.
+
+## Questions and output
+
+- Ask when a consequential visible choice lacks an established purpose, owner or contract. Identify the concrete choice and consequence, the source inspected and the missing fact. Do not assert an unavailable external contract is broken.
+- Write concise human-facing comments: "Why does X need Y? Z already carries it," "Which consumer requires this?" or "Can this owner control it in its own configuration?" Keep independent concerns at useful source anchors rather than hiding them in a broad omnibus comment.
+- Include concrete improvements and questions without a runtime-bug, consensus or comment-quota gate. Adjudicate blockers separately.
+- Keep confidence, assumptions and source/spec/intent classifications in the audit. Do not imitate personal mannerisms, frustration or sarcasm.
+- Provide a calibration ledger: source anchor, operation, actual inspected consumer/producer or existing mechanism, and justified reason or finding ID. Whole-component rows do not cover independent local operations. New assertions or explicit guards alone are not reasons.
+- For a potentially breaking identifier or protocol change, ask whether consumers/rollout permit it; do not demand a rename without checking compatibility.
+- If source or specification resolves a possible question, record the answer instead of forcing agreement with a human reviewer.
+- If delegating, use a general-purpose maintainer reviewer with explicit reviewed roots/diffs and no nested agents.`,
+        builtIn: true,
+    },
 ] as const;
 
 export const REVIEW_PROTOCOL_PROMPT = `You are an expert code reviewer reviewing a pull request on Azure DevOps.

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { appendAutoRoutingPrompt, buildReviewDiffArgs, parseReviewArguments, requiresCheckoutForAi } from '../../chat/prChatParticipant';
-import { BUILT_IN_REVIEW_LENSES, buildReviewChatQuery, buildReviewPrompt } from '../../chat/reviewLenses';
+import { BUILT_IN_REVIEW_LENSES, buildReviewChatQuery, buildReviewPrompt, getBuiltInReviewLens } from '../../chat/reviewLenses';
 
 suite('appendAutoRoutingPrompt', () => {
     test('leaves a textual user message for Copilot Auto routing', () => {
@@ -49,6 +49,7 @@ suite('review lenses', () => {
     test('ships the expected built-in lenses in order', () => {
         assert.deepStrictEqual(BUILT_IN_REVIEW_LENSES.map(lens => lens.id), [
             'general', 'bugs', 'security', 'architecture', 'performance',
+            'project-maintainer-review',
         ]);
     });
 
@@ -59,6 +60,34 @@ suite('review lenses', () => {
             assert.ok(prompt.includes(`Review Lens: ${lens.name}`));
             assert.ok(prompt.includes(lens.prompt));
         }
+    });
+
+    test('preserves the maintainer skill priorities and boundaries in the structured review prompt', () => {
+        const lens = getBuiltInReviewLens('project-maintainer-review');
+        assert.ok(lens);
+
+        const prompt = buildReviewPrompt(lens);
+
+        assert.ok(prompt.includes('First review whether the change should exist'));
+        for (const check of ['Removal', 'Information', 'Ownership', 'Existing mechanism', 'Contract', 'Producer/lifecycle']) {
+            assert.ok(prompt.includes(`**${check}:**`));
+        }
+        assert.ok(prompt.includes('Do not edit, post, commit, fetch, restore or build'));
+        assert.ok(prompt.includes('`src\\tools` unless changed'));
+        assert.ok(prompt.includes('## Phase 2: execution, cost and test fit'));
+        assert.ok(prompt.includes('without a runtime-bug, consensus or comment-quota gate'));
+        assert.ok(prompt.includes('Provide a calibration ledger'));
+        assert.ok(prompt.includes('type: <suggestion|issue|nitpick|question>'));
+    });
+
+    test('routes the built-in maintainer lens through the review chat query', () => {
+        const query = buildReviewChatQuery('project-maintainer-review', 'vs-target');
+
+        assert.deepStrictEqual(parseReviewArguments(query.substring('@azdo-pr /review '.length)), {
+            mode: 'vs-target',
+            lensId: 'project-maintainer-review',
+            cleanPrompt: '',
+        });
     });
 
     test('parses lens and mode in either order while preserving instructions', () => {
