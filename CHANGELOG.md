@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-10-06
+
 ### Added
 
 - Opt-in live integration tests against the dedicated `E2ETestRepo`, using a signed-in isolated VS Code profile, real review/comment commands, independent Azure DevOps HTTP verification, and run-owned PR/branch cleanup. Run `npm run test:live:signin` once, then `npm run test:live` as needed.
