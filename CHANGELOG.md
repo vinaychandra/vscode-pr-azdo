@@ -6,8 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in live integration tests against the dedicated `E2ETestRepo`, using a signed-in isolated VS Code profile, real review/comment commands, independent Azure DevOps HTTP verification, and run-owned PR/branch cleanup. Run `npm run test:live:signin` once, then `npm run test:live` as needed.
+
 ### Fixed
 
+- Draft publishing now forwards the selected iteration comparison and file change-tracking ID in all publish handlers, preventing comments on historical iterations from being attached to the latest iteration. This regression was reproduced by the live suite.
 - AI review and comment-resolution actions now start a Local chat session when VS Code offers multiple harnesses, avoiding unavailable `agent-host-copilotcli` models in the extension's chat participant. The user's default harness is unchanged.
 - Chat tools now receive the request's invocation token, and parallel tool calls and results remain grouped in matching conversation turns.
 - Iteration reviews request comment positions tracked to the selected comparison, update inline ranges and snapshot URIs on refresh, and compare the exact selected commits.

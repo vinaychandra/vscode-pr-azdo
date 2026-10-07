@@ -162,6 +162,36 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |
 | `Azure DevOps PR: View Default Prompts`    | View the built-in system prompts                     |
 
+## Live Tests
+
+Live integration tests are opt-in and target only [E2ETestRepo](https://dev.azure.com/vinaychandra/Personal/_git/E2ETestRepo). They are not included in `npm test` and do not use Playwright.
+
+For the first run, or after authentication expires:
+
+```sh
+npm run test:live:signin
+```
+
+In the new development VS Code window, run **Azure DevOps PR: Sign In**, complete Microsoft authentication, then close that window. This uses a separate profile under `.vscode-test/live`, not your normal profile. Interactive sign-in happens outside VS Code's extension-test mode because that mode refuses authentication dialogs.
+
+Run the suite with:
+
+```sh
+npm run test:live
+```
+
+The runner builds the extension, opens a pinned VS Code development host, runs Mocha assertions, closes the test window, and returns a nonzero exit code on failure. It exercises real extension commands and verifies their results independently through Azure DevOps HTTP APIs:
+
+- Opens a real draft PR and selects historical and iteration-to-iteration comparisons.
+- Publishes user and seeded AI drafts and verifies path, side, position, change tracking, and iteration metadata.
+- Checks actual text under inline comments after inserted lines, a deletion, and a server-recognized rename.
+- Verifies original comment context, replies, and thread resolution.
+- Abandons the PR and removes only run-owned branches, then verifies cleanup through HTTP.
+
+Each run creates unique `azdo-live/run-*` branches and files under `.azdo-live/run-*`. An empty repository is initialized with a permanent `main` README; an existing default branch is not modified. Abandoned PRs remain as an audit trail. Results and ownership ledgers are saved under `.vscode-test/live/results`; credentials are never written to those files. Interrupted runs are recovered only after validating their recorded repository, PR refs, and commit IDs. Cleanup refuses to delete a branch changed outside the recorded run.
+
+This suite seeds an AI draft to test publishing, rather than calling a real model. Copilot generation/harness behavior, visual rendering, checkout/worktree flows, and restart persistence still need separate smoke tests. Close the isolated sign-in/test window before starting another run.
+
 ## Known Issues
 
 See [KnownIssues.md](KnownIssues.md) for the current list.

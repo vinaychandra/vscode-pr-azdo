@@ -187,6 +187,10 @@ export class PrCommentController implements vscode.Disposable {
         this.applyCommentingRangeProvider();
     }
 
+    getThreadIterationContext(filePath: string): [changeTrackingId: number | undefined, iterationId: number | undefined, compareToIterationId: number | undefined] {
+        return [this._changeTrackingIds.get(filePath.replace(/^\//, '')), this._iterationId, this._compareToIterationId];
+    }
+
     /** Whether the given repo-relative file path is a Delete in the active PR. */
     private isDeletedFile(relativePath: string): boolean {
         const ct = this._changeTypes.get(relativePath);
@@ -313,9 +317,7 @@ export class PrCommentController implements vscode.Disposable {
                 this._prId,
                 reply.text,
                 { filePath: `/${filePath}`, startLine, startCol, endLine, endCol, side },
-                this._changeTrackingIds.get(filePath),
-                this._iterationId,
-                this._compareToIterationId,
+                ...this.getThreadIterationContext(filePath),
             );
 
             // Replace the temporary thread with a proper one

@@ -32,6 +32,12 @@ const REVIEW_WORKTREE_OPEN_KEY = 'reviewWorktreeOpenPath';
 const DRAFT_STATE_KEY = 'draftComments';
 let flushDraftSaves: (() => Promise<void>) | undefined;
 
+export interface DevelopmentReviewApi {
+	readonly activePrProvider: ActivePrTreeDataProvider | undefined;
+	readonly commentController: PrCommentController;
+	readonly contextProvider: PrContextProvider;
+}
+
 function externalReviewScope(parsed: ParsedAzDoPullRequestUrl): string {
 	return `external:${parsed.organization.toLowerCase()}/${parsed.project.toLowerCase()}/${parsed.repositoryName.toLowerCase()}/${parsed.pullRequestId}`;
 }
@@ -623,7 +629,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.selectIteration', async () => {
+		vscode.commands.registerCommand('vscode-pr-azdo.selectIteration', async (requestedIterationIds?: readonly number[]) => {
 			const pinned = pinnedSnapshotReview;
 			const provider = activePrProvider;
 			const pr = provider?._activePrForContext;
@@ -670,7 +676,7 @@ export async function activate(context: vscode.ExtensionContext) {
 							picked: pickedIds.has(entry.iterationId),
 						};
 				});
-				const selected = await vscode.window.showQuickPick(items, {
+				const selected = requestedIterationIds ? items.filter(item => item.iterationId !== undefined && requestedIterationIds.includes(item.iterationId)) : await vscode.window.showQuickPick(items, {
 					title: `PR #${pr.pullRequestId}: Show Iterations`,
 					placeHolder: 'Select iterations; gaps are included automatically',
 					canPickMany: true,
@@ -1539,7 +1545,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						startCol: 1,
 						endLine: info.line,
 						endCol: 1,
-					});
+					}, ...commentController.getThreadIterationContext(info.filePath));
 					commentController.disposeDraft(reply.thread);
 					vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 					activePrProvider.refresh();
@@ -1579,7 +1585,7 @@ export async function activate(context: vscode.ExtensionContext) {
 						endLine: info.endLine,
 						endCol: info.endCol,
 						side: info.side,
-					});
+					}, ...commentController.getThreadIterationContext(info.filePath));
 					commentController.disposeUserDraft(reply.thread);
 					vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 					activePrProvider.refresh();
@@ -1937,7 +1943,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					startCol: 1,
 					endLine: info.line,
 					endCol: 1,
-				});
+				}, ...commentController.getThreadIterationContext(info.filePath));
 				commentController.disposeDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2006,7 +2012,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					endLine: info.endLine,
 					endCol: info.endCol,
 					side: info.side,
-				});
+				}, ...commentController.getThreadIterationContext(info.filePath));
 				commentController.disposeUserDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2061,7 +2067,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					endLine: info.endLine,
 					endCol: info.endCol,
 					side: info.side,
-				});
+				}, ...commentController.getThreadIterationContext(info.filePath));
 				commentController.disposeUserDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2238,7 +2244,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					startCol: 1,
 					endLine: info.line,
 					endCol: 1,
-				});
+				}, ...commentController.getThreadIterationContext(info.filePath));
 				commentController.disposeDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2377,8 +2383,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 
 	context.subscriptions.push(
-			vscode.commands.registerCommand('vscode-pr-azdo.reviewPullRequestFromUrl', async () => {
-				const value = await vscode.window.showInputBox({
+			vscode.commands.registerCommand('vscode-pr-azdo.reviewPullRequestFromUrl', async (requestedUrl?: string) => {
+				const value = requestedUrl ?? await vscode.window.showInputBox({
 					title: 'Review Pull Request from URL',
 					prompt: 'Paste an Azure DevOps pull request URL',
 					placeHolder: 'https://dev.azure.com/org/project/_git/repo/pullrequest/123',
@@ -3221,6 +3227,20 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 		}),
 	);
+	if (context.extensionMode === vscode.ExtensionMode.Development) {
+		if (process.env.AZDO_LIVE_TESTS === '1' && process.env.AZDO_LIVE_RESULT) {
+			setTimeout(() => {
+				const runner = require(vscode.Uri.joinPath(context.extensionUri, 'out', 'test', 'live', 'runLiveTests.js').fsPath) as typeof import('./test/live/runLiveTests');
+				void runner.runLiveTests(context.extensionUri.fsPath);
+			}, 0);
+		}
+		return {
+			get activePrProvider() { return activePrProvider; },
+			commentController,
+			contextProvider: prContextProvider,
+		} satisfies DevelopmentReviewApi;
+	}
+	return undefined;
 }
 
 export async function deactivate(): Promise<void> {

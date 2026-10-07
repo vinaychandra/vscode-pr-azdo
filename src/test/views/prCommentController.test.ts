@@ -198,6 +198,17 @@ suite('PrCommentController', () => {
         }
     });
 
+    test('publishing uses change tracking and both IDs from the selected iteration comparison', () => {
+        const controller = new PrCommentController(createMockLog());
+        try {
+            controller.setPrContext({} as any, 42, ['src/index.ts'], undefined, undefined, 'base', 'source', 42, new Map([['src/index.ts', 17]]), 3, 2);
+            assert.deepStrictEqual(controller.getThreadIterationContext('src/index.ts'), [17, 3, 2]);
+            assert.deepStrictEqual(controller.getThreadIterationContext('/src/index.ts'), [17, 3, 2]);
+        } finally {
+            controller.dispose();
+        }
+    });
+
     // --- Review Mode ---
 
     test('reviewMode defaults to false', () => {
