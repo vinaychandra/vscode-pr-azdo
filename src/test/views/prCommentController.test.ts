@@ -127,6 +127,77 @@ suite('PrCommentController', () => {
         controller.dispose();
     });
 
+    test('refresh moves a reused thread to its tracked line', async () => {
+        const controller = new PrCommentController(createMockLog());
+        try {
+            controller.setReviewMode(true);
+            controller.setPrContext({} as any, 42, ['src/index.ts'], undefined, undefined, 'base', 'source');
+            await controller.updateThreads([makeThread()]);
+            const previous = controller.findThreadByAzdoId(1)!;
+            await controller.updateThreads([makeThread({
+                threadContext: {
+                    filePath: '/src/index.ts',
+                    rightFileStart: { line: 30, offset: 4 },
+                    rightFileEnd: { line: 31, offset: 8 },
+                },
+            })]);
+            const current = controller.findThreadByAzdoId(1)!;
+            assert.strictEqual(current, previous);
+            assert.ok(current.range?.isEqual(new vscode.Range(29, 3, 30, 7)));
+        } finally {
+            controller.dispose();
+        }
+    });
+
+    test('iteration switch recreates the thread on the new snapshot and preserves its reply draft', async () => {
+        const controller = new PrCommentController(createMockLog());
+        try {
+            controller.setReviewMode(true);
+            controller.setPrContext({} as any, 42, ['src/index.ts'], undefined, undefined, 'base', 'iteration-1');
+            await controller.updateThreads([makeThread()]);
+            const previous = controller.findThreadByAzdoId(1)!;
+            controller.saveReplyAsDraft(previous, 'Keep this reply');
+            controller.setPrContext({} as any, 42, ['src/index.ts'], undefined, undefined, 'base', 'iteration-2');
+            await controller.updateThreads([makeThread()]);
+            const current = controller.findThreadByAzdoId(1)!;
+            assert.notStrictEqual(current, previous);
+            assert.strictEqual(new URLSearchParams(current.uri.query).get('ref'), 'iteration-2');
+            assert.strictEqual(controller.getReplyDraftInfo(current)?.body, 'Keep this reply');
+            assert.strictEqual(controller.getReplyDraftInfo(previous), undefined);
+        } finally {
+            controller.dispose();
+        }
+    });
+
+    test('original context keeps renamed paths and original ranges together on either side', async () => {
+        const controller = new PrCommentController(createMockLog());
+        try {
+            controller.setReviewMode(true);
+            controller.setPrContext({} as any, 42, ['src/index.ts'], undefined, undefined, 'base', 'source');
+            for (const side of ['right', 'left'] as const) {
+                const thread = makeThread({
+                    pullRequestThreadContext: {
+                        iterationContext: { firstComparingIteration: 1, secondComparingIteration: 2 },
+                        trackingCriteria: {
+                            origFilePath: '/src/original.ts',
+                            ...(side === 'right'
+                                ? { origRightFileStart: { line: 5, offset: 2 }, origRightFileEnd: { line: 6, offset: 8 } }
+                                : { origLeftFileStart: { line: 5, offset: 2 }, origLeftFileEnd: { line: 6, offset: 8 } }),
+                        },
+                    },
+                });
+                await controller.updateThreads([thread]);
+                const context = controller.getOriginalContext(controller.findThreadByAzdoId(1)!)!;
+                assert.strictEqual(context.filePath, 'src/original.ts');
+                assert.strictEqual(context.iterationId, 2);
+                assert.strictEqual(context.side, side);
+                assert.deepStrictEqual([context.startLine, context.startCol, context.endLine, context.endCol], [5, 2, 6, 8]);
+            }
+        } finally {
+            controller.dispose();
+        }
+    });
+
     // --- Review Mode ---
 
     test('reviewMode defaults to false', () => {

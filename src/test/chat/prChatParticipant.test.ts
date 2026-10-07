@@ -1,7 +1,50 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { appendAutoRoutingPrompt, buildReviewDiffArgs, parseReviewArguments, requiresCheckoutForAi } from '../../chat/prChatParticipant';
+import { appendAutoRoutingPrompt, appendToolRound, buildReviewDiffArgs, openPrChat, parseReviewArguments, requiresCheckoutForAi } from '../../chat/prChatParticipant';
 import { BUILT_IN_REVIEW_LENSES, buildReviewChatQuery, buildReviewPrompt, getBuiltInReviewLens } from '../../chat/reviewLenses';
+
+suite('openPrChat', () => {
+    test('opens the review in a new Local session before submitting the participant query', async () => {
+        const calls: unknown[][] = [];
+        await openPrChat('@azdo-pr /review --mode=vs-target', {
+            getCommands: async () => ['workbench.action.chat.newLocalChat'],
+            executeCommand: async <Result>(command: string, ...args: unknown[]) => {
+                calls.push([command, ...args]);
+                return undefined as Result;
+            },
+        });
+        assert.deepStrictEqual(calls, [
+            ['workbench.action.chat.open'],
+            ['workbench.action.chat.newLocalChat'],
+            ['workbench.action.chat.open', { query: '@azdo-pr /review --mode=vs-target' }],
+        ]);
+    });
+
+    test('supports older VS Code builds without the Local harness command', async () => {
+        const calls: unknown[][] = [];
+        await openPrChat('@azdo-pr /fix', {
+            getCommands: async () => [],
+            executeCommand: async <Result>(command: string, ...args: unknown[]) => {
+                calls.push([command, ...args]);
+                return undefined as Result;
+            },
+        });
+        assert.deepStrictEqual(calls, [['workbench.action.chat.open', { query: '@azdo-pr /fix' }]]);
+    });
+
+    test('does not submit the review to an incompatible harness if Local session creation fails', async () => {
+        const calls: string[] = [];
+        await assert.rejects(openPrChat('@azdo-pr /review', {
+            getCommands: async () => ['workbench.action.chat.newLocalChat'],
+            executeCommand: async <Result>(command: string) => {
+                calls.push(command);
+                if (command.endsWith('newLocalChat')) { throw new Error('Cannot open Local chat'); }
+                return undefined as Result;
+            },
+        }), /Cannot open Local chat/);
+        assert.deepStrictEqual(calls, ['workbench.action.chat.open', 'workbench.action.chat.newLocalChat']);
+    });
+});
 
 suite('appendAutoRoutingPrompt', () => {
     test('leaves a textual user message for Copilot Auto routing', () => {
@@ -26,6 +69,33 @@ suite('appendAutoRoutingPrompt', () => {
     });
 });
 
+suite('appendToolRound', () => {
+    for (const text of ['', 'Inspecting the relevant files.']) {
+        test(`keeps parallel tool calls and results in matching turns ${text ? 'with' : 'without'} text`, () => {
+            const messages: vscode.LanguageModelChatMessage[] = [];
+            const calls = [
+                new vscode.LanguageModelToolCallPart('call-1', 'read', {}),
+                new vscode.LanguageModelToolCallPart('call-2', 'search', {}),
+            ];
+            const results = [
+                new vscode.LanguageModelToolResultPart('call-1', [new vscode.LanguageModelTextPart('file content')]),
+                new vscode.LanguageModelToolResultPart('call-2', [new vscode.LanguageModelTextPart('Error: search failed')]),
+            ];
+
+            appendToolRound(messages, text, calls, results);
+            appendAutoRoutingPrompt(messages, 'Continue reviewing.');
+
+            assert.strictEqual(messages.length, 3);
+            assert.strictEqual(messages[0].role, vscode.LanguageModelChatMessageRole.Assistant);
+            assert.deepStrictEqual(messages[0].content.filter(part => part instanceof vscode.LanguageModelToolCallPart), calls);
+            assert.deepStrictEqual(messages[0].content.filter(part => part instanceof vscode.LanguageModelTextPart).map(part => part.value), text ? [text] : []);
+            assert.strictEqual(messages[1].role, vscode.LanguageModelChatMessageRole.User);
+            assert.deepStrictEqual(messages[1].content, results);
+            assert.ok(messages[2].content[0] instanceof vscode.LanguageModelTextPart);
+        });
+    }
+});
+
 suite('requiresCheckoutForAi', () => {
     test('blocks fix and PR review commands but allows read-only explanation', () => {
         assert.strictEqual(requiresCheckoutForAi('fix'), true);
@@ -40,7 +110,7 @@ suite('buildReviewDiffArgs', () => {
     test('uses immutable target and source refs for snapshot reviews', () => {
         assert.deepStrictEqual(
             buildReviewDiffArgs('target-sha', ['src/a.ts', 'README.md'], 'vs-target', 'origin/local', 'source-sha'),
-            ['diff', '--merge-base', 'target-sha', 'source-sha', '--', 'src/a.ts', 'README.md'],
+            ['diff', 'target-sha', 'source-sha', '--', 'src/a.ts', 'README.md'],
         );
     });
 });

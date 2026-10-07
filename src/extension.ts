@@ -17,7 +17,7 @@ import { computeRelativePath, extractPathFromGitRefUri, getSnapshotPathFromDiffI
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { AI_CHECKOUT_REQUIRED_MESSAGE, registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff } from './chat/prChatParticipant';
+import { AI_CHECKOUT_REQUIRED_MESSAGE, registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff, openPrChat } from './chat/prChatParticipant';
 import { registerPrTools } from './chat/prTools';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, fetchPullRequestSnapshot, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
@@ -1701,11 +1701,12 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const filePath = azdoThread.threadContext?.filePath;
-			const startLine = azdoThread.threadContext?.rightFileStart?.line ?? 1;
-			const startCol = azdoThread.threadContext?.rightFileStart?.offset ?? 1;
-			const endLine = azdoThread.threadContext?.rightFileEnd?.line ?? startLine;
-			const endCol = azdoThread.threadContext?.rightFileEnd?.offset ?? startCol;
+			const originalContext = commentController.getOriginalContext(vsThread);
+			const filePath = originalContext?.filePath ?? azdoThread.threadContext?.filePath;
+			const startLine = originalContext?.startLine ?? azdoThread.threadContext?.rightFileStart?.line ?? azdoThread.threadContext?.leftFileStart?.line ?? 1;
+			const startCol = originalContext?.startCol ?? azdoThread.threadContext?.rightFileStart?.offset ?? azdoThread.threadContext?.leftFileStart?.offset ?? 1;
+			const endLine = originalContext?.endLine ?? azdoThread.threadContext?.rightFileEnd?.line ?? azdoThread.threadContext?.leftFileEnd?.line ?? startLine;
+			const endCol = originalContext?.endCol ?? azdoThread.threadContext?.rightFileEnd?.offset ?? azdoThread.threadContext?.leftFileEnd?.offset ?? startCol;
 			const relativePath = filePath?.startsWith('/') ? filePath.substring(1) : (filePath ?? '');
 
 			// Store context for the chat participant to pick up
@@ -1721,9 +1722,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			outputChannel.appendLine(`[ai] Resolve with AI: thread=${azdoThread.id}, file=${relativePath} L${startLine}:${startCol}-L${endLine}:${endCol}`);
 
 			// Open Copilot Chat with @azdo-pr /fix pre-filled
-			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: '@azdo-pr /fix',
-			});
+			await openPrChat('@azdo-pr /fix');
 		}),
 	);
 
@@ -1805,18 +1804,14 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 			if (activePrProvider?.isSnapshotReview) {
 				outputChannel.appendLine(`[ai] reviewWithAI: reviewing pinned PR snapshot with lens=${lens.id}`);
-				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: buildReviewChatQuery(lens.id, 'vs-target'),
-				});
+				await openPrChat(buildReviewChatQuery(lens.id, 'vs-target'));
 				return;
 			}
 			outputChannel.appendLine('[ai] reviewWithAI: detecting git state…');
 			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				outputChannel.appendLine('[ai] reviewWithAI: no git repo found');
-				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: buildReviewChatQuery(lens.id),
-				});
+				await openPrChat(buildReviewChatQuery(lens.id));
 				return;
 			}
 
@@ -1830,9 +1825,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!options) {
 				// Scenario 1: clean + pushed → auto-proceed
 				outputChannel.appendLine('[ai] reviewWithAI: clean+pushed → opening review with vs-target');
-				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: buildReviewChatQuery(lens.id, 'vs-target'),
-				});
+				await openPrChat(buildReviewChatQuery(lens.id, 'vs-target'));
 				return;
 			}
 
@@ -1846,9 +1839,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			outputChannel.appendLine(`[ai] reviewWithAI: lens=${lens.id}, mode=${picked.reviewMode}`);
-			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: buildReviewChatQuery(lens.id, picked.reviewMode),
-			});
+			await openPrChat(buildReviewChatQuery(lens.id, picked.reviewMode));
 		}),
 	);
 
@@ -2316,7 +2307,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			const sourceCommit = iteration.sourceRefCommit?.commitId;
-			const targetCommit = iteration.targetRefCommit?.commitId ?? iteration.commonRefCommit?.commitId;
+			const targetCommit = prContextProvider.resolveComparisonCommit(ctx.azdoThread);
 			if (!sourceCommit) {
 				vscode.window.showWarningMessage('Source commit SHA not available for this iteration.');
 				return;
@@ -2340,10 +2331,11 @@ export async function activate(context: vscode.ExtensionContext) {
 			const endCol = Math.max(0, ctx.endCol - 1);
 			const commentRange = new vscode.Range(line, col, endLine, endCol);
 
-			// Build fully rendered comments (with suggestion diffs) against the source commit file
-			const diffComments = await commentController.buildCommentsForUri(ctx.azdoThread, rightUri, commentRange);
+			// Build fully rendered comments (with suggestion diffs) against the original comment side
+			const commentUri = ctx.side === 'left' ? leftUri : rightUri;
+			const diffComments = await commentController.buildCommentsForUri(ctx.azdoThread, commentUri, commentRange);
 			if (diffComments.length > 0) {
-				const diffThread = commentController.createThreadOnUri(rightUri, commentRange, diffComments);
+				const diffThread = commentController.createThreadOnUri(commentUri, commentRange, diffComments);
 				if (diffThread) {
 					diffThread.canReply = false;
 					diffThread.label = 'Original Comment';
@@ -3068,9 +3060,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!options) {
 				// Scenario 1: clean + pushed → auto-proceed
 				outputChannel.appendLine(`[ext] standaloneReview: clean+pushed → opening review-branch with vs-target`);
-				await vscode.commands.executeCommand('workbench.action.chat.open', {
-					query: `@azdo-pr /review-branch ${targetBranch} --mode=vs-target`,
-				});
+				await openPrChat(`@azdo-pr /review-branch ${targetBranch} --mode=vs-target`);
 				return;
 			}
 
@@ -3084,9 +3074,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			outputChannel.appendLine(`[ext] standaloneReview: user selected mode=${picked.reviewMode}`);
-			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: `@azdo-pr /review-branch ${targetBranch} --mode=${picked.reviewMode}`,
-			});
+			await openPrChat(`@azdo-pr /review-branch ${targetBranch} --mode=${picked.reviewMode}`);
 		}),
 	);
 

@@ -86,6 +86,8 @@ When code has changed since a comment was made, click the **$(git-compare)** but
 
 A Copilot Chat participant that helps resolve PR comments and review code:
 
+AI review and comment-resolution actions open a new **Local** chat session when VS Code offers multiple chat harnesses. The Copilot CLI harness uses agent-host models that are not available through this extension's chat participant API. Your default harness setting is not changed. When entering `@azdo-pr` commands manually, use the Local harness.
+
 - **`/fix`** — analyze a comment thread and suggest a code fix, a reply, or both
 - **`/explain`** — explain what a comment is asking for
 - **`/review`** — full AI code review of all changed files with inline draft comments

@@ -681,7 +681,11 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     private async loadThreads(prId: number, generation = this._activePrGeneration): Promise<void> {
         if (this._allThreads) { return; }
 
-        const threads = await this.prService.getPrThreads(prId);
+        const threads = await this.prService.getPrThreads(
+            prId,
+            this._reviewContext?.iterationId,
+            this._reviewContext?.compareToIterationId,
+        );
         if (!this.isCurrentPr(prId, generation)) { return; }
         this.log.appendLine(`[active-pr] Loaded ${threads.length} comment thread(s)`);
 

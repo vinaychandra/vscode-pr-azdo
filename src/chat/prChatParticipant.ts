@@ -19,7 +19,19 @@ import { buildReviewPrompt, getBuiltInReviewLens, type ReviewLensService } from 
 
 const PARTICIPANT_ID = 'vscode-pr-azdo.pr-assistant';
 
-/** Tools that require toolInvocationToken and cannot be used from a chat participant. */
+export async function openPrChat(
+    query: string,
+    commands: Pick<typeof vscode.commands, 'executeCommand' | 'getCommands'> = vscode.commands,
+): Promise<void> {
+    const available = await commands.getCommands(true);
+    if (available.includes('workbench.action.chat.newLocalChat')) {
+        await commands.executeCommand('workbench.action.chat.open');
+        await commands.executeCommand('workbench.action.chat.newLocalChat');
+    }
+    await commands.executeCommand('workbench.action.chat.open', { query });
+}
+
+/** Workspace mutation and participant-incompatible tools excluded from read-only reviews. */
 const BLOCKED_TOOL_NAMES = new Set([
     'copilot_applyPatch', 'copilot_replaceString', 'copilot_multiReplaceString',
     'copilot_insertEdit', 'copilot_createFile', 'copilot_createDirectory',
@@ -134,6 +146,19 @@ export function appendAutoRoutingPrompt(messages: vscode.LanguageModelChatMessag
     messages.push(vscode.LanguageModelChatMessage.User(prompt));
 }
 
+export function appendToolRound(
+    messages: vscode.LanguageModelChatMessage[],
+    text: string,
+    calls: vscode.LanguageModelToolCallPart[],
+    results: vscode.LanguageModelToolResultPart[],
+): void {
+    messages.push(vscode.LanguageModelChatMessage.Assistant([
+        ...(text ? [new vscode.LanguageModelTextPart(text)] : []),
+        ...calls,
+    ]));
+    messages.push(vscode.LanguageModelChatMessage.User(results));
+}
+
 /**
  * Register the @azdo-pr chat participant.
  */
@@ -189,7 +214,7 @@ export function registerPrChatParticipant(
         // Use peek (not consume) so LM tools can still access it during this handler
         const commentCtx = contextProvider.peekCommentContext();
         if (commentCtx) {
-            const threadText = contextProvider.formatThreadForPrompt(commentCtx.thread);
+            const threadText = contextProvider.formatThreadForPrompt(commentCtx.thread, commentCtx);
 
             // Try to read the actual targeted text from the file so the LM doesn't have to count characters
             let targetedTextHint = '';
@@ -222,7 +247,7 @@ export function registerPrChatParticipant(
                         }
                     }
                     // Fall back to working copy if original context unavailable
-                    if (!text && !contextProvider.isSnapshotReview) {
+                    if (!text && !sourceCommit && !contextProvider.isSnapshotReview) {
                         const fileUri = vscode.Uri.joinPath(workspaceRoot, commentCtx.filePath);
                         const doc = await vscode.workspace.openTextDocument(fileUri);
                         const range = new vscode.Range(
@@ -293,7 +318,7 @@ export function registerPrChatParticipant(
         stream.progress('Analyzing comment…');
 
         try {
-            // Only expose tools that work without toolInvocationToken
+            // Keep reviews read-only while allowing tools tied to this chat request.
             const tools = getChatTools(contextProvider.isSnapshotReview);
 
             const response = await request.model.sendRequest(messages, {
@@ -324,11 +349,7 @@ export function registerPrChatParticipant(
                     break; // No more tool calls — done
                 }
 
-                // Include any text the model already emitted so it doesn't repeat itself
-                if (roundText) {
-                    messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
-                }
-
+                const toolResults: vscode.LanguageModelToolResultPart[] = [];
                 for (const call of pendingToolCalls) {
                     log.appendLine(`[chat] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
                     stream.progress(`Using ${call.name}…`);
@@ -336,25 +357,20 @@ export function registerPrChatParticipant(
                     try {
                         const toolResult = await vscode.lm.invokeTool(call.name, {
                             input: call.input,
-                            toolInvocationToken: undefined,
+                            toolInvocationToken: request.toolInvocationToken,
                         }, token);
 
-                        messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                        messages.push(vscode.LanguageModelChatMessage.User([
-                            new vscode.LanguageModelToolResultPart(call.callId, toolResult.content),
-                        ]));
+                        toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, toolResult.content));
                     } catch (err) {
                         const msg = err instanceof Error ? err.message : String(err);
                         log.appendLine(`[chat] Tool call failed: ${msg}`);
-                        messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                        messages.push(vscode.LanguageModelChatMessage.User([
-                            new vscode.LanguageModelToolResultPart(call.callId, [
-                                new vscode.LanguageModelTextPart(`Error: ${msg}`),
-                            ]),
+                        toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, [
+                            new vscode.LanguageModelTextPart(`Error: ${msg}`),
                         ]));
                     }
                 }
 
+                appendToolRound(messages, roundText, pendingToolCalls, toolResults);
                 appendAutoRoutingPrompt(messages, 'Continue resolving the pull request comment using the tool results above.');
                 log.appendLine(`[chat] Continuing after ${pendingToolCalls.length} tool call(s) with Auto routing context.`);
 
@@ -564,33 +580,25 @@ async function handleReviewBranch(
                 break;
             }
 
-            if (roundText) {
-                messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
-            }
-
+            const toolResults: vscode.LanguageModelToolResultPart[] = [];
             for (const call of pendingCalls) {
                 log.appendLine(`[chat/review-branch] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
                 stream.progress(`Using ${call.name}…`);
                 try {
                     const result = await vscode.lm.invokeTool(call.name, {
                         input: call.input,
-                        toolInvocationToken: undefined,
+                        toolInvocationToken: request.toolInvocationToken,
                     }, token);
-                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                    messages.push(vscode.LanguageModelChatMessage.User([
-                        new vscode.LanguageModelToolResultPart(call.callId, result.content),
-                    ]));
+                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
-                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                    messages.push(vscode.LanguageModelChatMessage.User([
-                        new vscode.LanguageModelToolResultPart(call.callId, [
-                            new vscode.LanguageModelTextPart(`Error: ${msg}`),
-                        ]),
+                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, [
+                        new vscode.LanguageModelTextPart(`Error: ${msg}`),
                     ]));
                 }
             }
 
+            appendToolRound(messages, roundText, pendingCalls, toolResults);
             appendAutoRoutingPrompt(messages, 'Continue reviewing the branch changes using the tool results above.');
             log.appendLine(`[chat/review-branch] Continuing after ${pendingCalls.length} tool call(s) with Auto routing context.`);
 
@@ -736,7 +744,7 @@ async function handleReview(
     log.appendLine(`[chat] /review${isQuick ? '-quick' : ''}: mode=${reviewMode} ${diffFilePaths.length || 'all'} files`);
 
     try {
-        // Only expose tools that work without toolInvocationToken
+        // Keep reviews read-only while allowing tools tied to this chat request.
         const tools = getChatTools(contextProvider.isSnapshotReview);
 
         const response = await request.model.sendRequest(messages, {
@@ -767,34 +775,25 @@ async function handleReview(
                 break;
             }
 
-            // Include any text the model already emitted so it doesn't repeat itself
-            if (roundText) {
-                messages.push(vscode.LanguageModelChatMessage.Assistant(roundText));
-            }
-
+            const toolResults: vscode.LanguageModelToolResultPart[] = [];
             for (const call of pendingCalls) {
                 log.appendLine(`[chat/review] Tool call (round ${round + 1}): ${call.name}(${JSON.stringify(call.input)})`);
                 stream.progress(`Using ${call.name}…`);
                 try {
                     const result = await vscode.lm.invokeTool(call.name, {
                         input: call.input,
-                        toolInvocationToken: undefined,
+                        toolInvocationToken: request.toolInvocationToken,
                     }, token);
-                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                    messages.push(vscode.LanguageModelChatMessage.User([
-                        new vscode.LanguageModelToolResultPart(call.callId, result.content),
-                    ]));
+                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
-                    messages.push(vscode.LanguageModelChatMessage.Assistant([call]));
-                    messages.push(vscode.LanguageModelChatMessage.User([
-                        new vscode.LanguageModelToolResultPart(call.callId, [
-                            new vscode.LanguageModelTextPart(`Error: ${msg}`),
-                        ]),
+                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, [
+                        new vscode.LanguageModelTextPart(`Error: ${msg}`),
                     ]));
                 }
             }
 
+            appendToolRound(messages, roundText, pendingCalls, toolResults);
             appendAutoRoutingPrompt(messages, 'Continue reviewing the pull request changes using the tool results above.');
             log.appendLine(`[chat/review] Continuing after ${pendingCalls.length} tool call(s) with Auto routing context.`);
 
@@ -876,7 +875,7 @@ export function buildReviewDiffArgs(
     sourceRef?: string,
 ): string[] {
     return sourceRef
-        ? ['diff', '--merge-base', targetRef, sourceRef, '--', ...filePaths]
+        ? ['diff', targetRef, sourceRef, '--', ...filePaths]
         : mode
             ? buildGitDiffArgs(mode, targetRef, currentBranchRef, filePaths)
             : (filePaths.length > 0

@@ -497,6 +497,7 @@ export class PrCommentController implements vscode.Disposable {
      */
     getOriginalContext(thread: vscode.CommentThread): {
         iterationId: number;
+        side: 'left' | 'right';
         filePath: string;
         startLine: number;
         startCol: number;
@@ -518,30 +519,22 @@ export class PrCommentController implements vscode.Disposable {
             ?? azdoThread.threadContext?.filePath;
         if (!origFilePath) { return undefined; }
 
-        const startLine = tracking?.origRightFileStart?.line
-            ?? tracking?.origLeftFileStart?.line
-            ?? azdoThread.threadContext?.rightFileStart?.line
-            ?? azdoThread.threadContext?.leftFileStart?.line
-            ?? 1;
-        const startCol = tracking?.origRightFileStart?.offset
-            ?? tracking?.origLeftFileStart?.offset
-            ?? azdoThread.threadContext?.rightFileStart?.offset
-            ?? azdoThread.threadContext?.leftFileStart?.offset
-            ?? 1;
-        const endLine = tracking?.origRightFileEnd?.line
-            ?? tracking?.origLeftFileEnd?.line
-            ?? azdoThread.threadContext?.rightFileEnd?.line
-            ?? azdoThread.threadContext?.leftFileEnd?.line
-            ?? startLine;
-        const endCol = tracking?.origRightFileEnd?.offset
-            ?? tracking?.origLeftFileEnd?.offset
-            ?? azdoThread.threadContext?.rightFileEnd?.offset
-            ?? azdoThread.threadContext?.leftFileEnd?.offset
-            ?? startCol;
+        const originalStart = tracking?.origRightFileStart ?? tracking?.origLeftFileStart;
+        const side = originalStart
+            ? (tracking?.origRightFileStart ? 'right' : 'left')
+            : (azdoThread.threadContext?.rightFileStart ? 'right' : 'left');
+        const start = originalStart ?? (side === 'right' ? azdoThread.threadContext?.rightFileStart : azdoThread.threadContext?.leftFileStart);
+        const end = originalStart
+            ? (side === 'right' ? tracking?.origRightFileEnd : tracking?.origLeftFileEnd)
+            : (side === 'right' ? azdoThread.threadContext?.rightFileEnd : azdoThread.threadContext?.leftFileEnd);
+        const startLine = start?.line ?? 1;
+        const startCol = start?.offset ?? 1;
+        const endLine = end?.line ?? startLine;
+        const endCol = end?.offset ?? startCol;
 
         const filePath = origFilePath.startsWith('/') ? origFilePath.substring(1) : origFilePath;
 
-        return { iterationId, filePath, startLine, startCol, endLine, endCol, azdoThread };
+        return { iterationId, side, filePath, startLine, startCol, endLine, endCol, azdoThread };
     }
 
     /**
@@ -624,8 +617,9 @@ export class PrCommentController implements vscode.Disposable {
 
                 // Check if we can reuse an existing thread
                 const existingThread = azdoThread.id ? existingById.get(azdoThread.id) : undefined;
-                if (existingThread && azdoThread.id) {
+                if (existingThread && existingThread.uri.toString() === prLevelUri.toString() && azdoThread.id) {
                     survivingIds.add(azdoThread.id);
+                    existingThread.range = range;
                     existingThread.comments = comments;
                     existingThread.canReply = !!this._prService;
                     existingThread.label = this.getThreadLabel(azdoThread);
@@ -640,6 +634,7 @@ export class PrCommentController implements vscode.Disposable {
                     thread.label = this.getThreadLabel(azdoThread);
                     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
                     thread.contextValue = this.getThreadContextValue(azdoThread);
+                    this.transferReplyDraft(existingThread, thread, comments.length);
                     if (azdoThread.id) {
                         newMetaMap.set(thread, { id: azdoThread.id, azdoThread });
                     }
@@ -670,7 +665,7 @@ export class PrCommentController implements vscode.Disposable {
 
             // Check if we can reuse an existing thread
             const existingThread = azdoThread.id ? existingById.get(azdoThread.id) : undefined;
-            if (existingThread && azdoThread.id) {
+            if (existingThread && existingThread.uri.toString() === fileUri.toString() && azdoThread.id) {
                 survivingIds.add(azdoThread.id);
 
                 // Update comments in-place — rebuild them for suggestion rendering
@@ -680,6 +675,7 @@ export class PrCommentController implements vscode.Disposable {
                     existingThread.dispose();
                     continue;
                 }
+                existingThread.range = range;
                 existingThread.comments = comments;
                 existingThread.canReply = !!this._prService;
                 existingThread.label = this.getThreadLabel(azdoThread);
@@ -705,6 +701,7 @@ export class PrCommentController implements vscode.Disposable {
             thread.label = this.getThreadLabel(azdoThread);
             thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
             thread.contextValue = this.getThreadContextValue(azdoThread); // For menu contributions
+            this.transferReplyDraft(existingThread, thread, comments.length);
 
             // Map this VS Code thread to its AzDO metadata for API calls
             if (azdoThread.id) {
@@ -732,6 +729,20 @@ export class PrCommentController implements vscode.Disposable {
         this.restoreCurrentPrDrafts();
 
         this.log.appendLine(`[comments] Incremental update: ${created} created, ${updated} updated, ${disposed} disposed`);
+    }
+
+    private transferReplyDraft(previous: vscode.CommentThread | undefined, current: vscode.CommentThread, commentCount: number): void {
+        if (!previous) { return; }
+        current.collapsibleState = previous.collapsibleState;
+        const info = this._replyDraftThreads.get(previous);
+        const body = this._replyDraftBodies.get(previous);
+        this._replyDraftThreads.delete(previous);
+        this._replyDraftBodies.delete(previous);
+        if (info && body) {
+            this._replyDraftThreads.set(current, info);
+            this._replyDraftBodies.set(current, body);
+            this.reapplyReplyDraft(current, commentCount);
+        }
     }
 
     /**

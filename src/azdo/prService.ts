@@ -309,11 +309,13 @@ export class PullRequestService {
     }
 
     /** Get all comment threads for a pull request. */
-    async getPrThreads(pullRequestId: number): Promise<GitPullRequestCommentThread[]> {
+    async getPrThreads(pullRequestId: number, iterationId?: number, compareToIterationId?: number): Promise<GitPullRequestCommentThread[]> {
         return this.withGitApi(git => git.getThreads(
             this.remoteInfo.repositoryName,
             pullRequestId,
             this.remoteInfo.project,
+            iterationId,
+            compareToIterationId,
         ));
     }
 

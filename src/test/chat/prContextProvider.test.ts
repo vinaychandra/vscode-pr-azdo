@@ -265,6 +265,36 @@ suite('PrContextProvider — resolveSourceCommit', () => {
         assert.deepStrictEqual(provider.iterations, iterations);
     });
 
+    test('resolves left-side iteration comments to the compared source, not the target branch', () => {
+        const provider = new PrContextProvider();
+        provider.setActivePr(makePr(), [], [
+            { id: 1, sourceRefCommit: { commitId: 'source-one' } },
+            { id: 2, sourceRefCommit: { commitId: 'source-two' }, targetRefCommit: { commitId: 'target-two' }, commonRefCommit: { commitId: 'base-two' } },
+        ]);
+        const thread = makeThread({
+            threadContext: { filePath: '/src/index.ts', leftFileStart: { line: 10, offset: 1 } },
+            pullRequestThreadContext: { iterationContext: { firstComparingIteration: 1, secondComparingIteration: 2 } },
+        });
+        assert.strictEqual(provider.resolveCommentCommit(thread), 'source-one');
+        thread.pullRequestThreadContext!.trackingCriteria = { origLeftFileStart: { line: 5, offset: 1 } };
+        thread.threadContext = { filePath: '/src/index.ts', rightFileStart: { line: 30, offset: 1 } };
+        assert.strictEqual(provider.resolveCommentCommit(thread), 'source-one');
+        thread.pullRequestThreadContext!.iterationContext!.firstComparingIteration = 0;
+        assert.strictEqual(provider.resolveCommentCommit(thread), 'base-two');
+        thread.pullRequestThreadContext!.iterationContext!.firstComparingIteration = 2;
+        assert.strictEqual(provider.resolveCommentCommit(thread), 'base-two');
+    });
+
+    test('formats original context without mixing tracked paths and line numbers', () => {
+        const provider = new PrContextProvider();
+        const thread = makeThread();
+        const context = { thread, filePath: 'src/original.ts', startLine: 5, startCol: 2, endLine: 6, endCol: 8 };
+        const text = provider.formatThreadForPrompt(thread, context);
+        assert.ok(text.includes('src/original.ts L5-6 Col2-8'));
+        assert.ok(!text.includes('src/index.ts'));
+        assert.ok(!text.includes('L10'));
+    });
+
     test('resolves a right-side comment to the snapshot source ref', () => {
         const provider = new PrContextProvider();
         provider.setActivePr(makePr(), [], [], {

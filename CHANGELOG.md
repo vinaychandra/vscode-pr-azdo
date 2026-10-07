@@ -6,6 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Fixed
+
+- AI review and comment-resolution actions now start a Local chat session when VS Code offers multiple harnesses, avoiding unavailable `agent-host-copilotcli` models in the extension's chat participant. The user's default harness is unchanged.
+- Chat tools now receive the request's invocation token, and parallel tool calls and results remain grouped in matching conversation turns.
+- Iteration reviews request comment positions tracked to the selected comparison, update inline ranges and snapshot URIs on refresh, and compare the exact selected commits.
+- Original comment context and AI resolution now keep original paths, ranges, and commits together, including left-side comments on earlier iterations or the common base.
+
 ## [0.0.16]
 
 ### Added

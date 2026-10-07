@@ -109,31 +109,42 @@ export class PrContextProvider {
 
     /** Resolve the commit containing the side on which a comment was created. */
     resolveCommentCommit(thread: GitPullRequestCommentThread): string | undefined {
-        const prCtx = (thread as any).pullRequestThreadContext;
+        const prCtx = thread.pullRequestThreadContext;
         const iterationId = prCtx?.iterationContext?.secondComparingIteration;
         const iteration = this._iterations.find(i => i.id === iterationId);
-        const leftOnly = !thread.threadContext?.rightFileStart && !!thread.threadContext?.leftFileStart;
+        const tracking = prCtx?.trackingCriteria;
+        const hasOriginalStart = !!(tracking?.origRightFileStart ?? tracking?.origLeftFileStart);
+        const leftOnly = hasOriginalStart
+            ? !tracking?.origRightFileStart && !!tracking?.origLeftFileStart
+            : !thread.threadContext?.rightFileStart && !!thread.threadContext?.leftFileStart;
         if (leftOnly) {
-            return iteration?.targetRefCommit?.commitId
-                ?? iteration?.commonRefCommit?.commitId
-                ?? this._targetRef;
+            return this.resolveComparisonCommit(thread);
         }
         return iteration?.sourceRefCommit?.commitId ?? this._sourceRef;
+    }
+
+    resolveComparisonCommit(thread: GitPullRequestCommentThread): string | undefined {
+        const context = thread.pullRequestThreadContext?.iterationContext;
+        if (context?.firstComparingIteration && context.firstComparingIteration !== context.secondComparingIteration) {
+            return this._iterations.find(iteration => iteration.id === context.firstComparingIteration)?.sourceRefCommit?.commitId;
+        }
+        const iteration = this._iterations.find(candidate => candidate.id === context?.secondComparingIteration);
+        return iteration?.commonRefCommit?.commitId ?? iteration?.targetRefCommit?.commitId ?? this._targetRef;
     }
 
     /**
      * Build a text summary of the comment thread for inclusion in an LM prompt.
      */
-    formatThreadForPrompt(thread: GitPullRequestCommentThread): string {
+    formatThreadForPrompt(thread: GitPullRequestCommentThread, context?: CommentContext): string {
         const parts: string[] = [];
-        const rawPath = thread.threadContext?.filePath;
+        const rawPath = context?.filePath ?? thread.threadContext?.filePath;
         const filePath = rawPath
             ? (rawPath.startsWith('/') ? rawPath.substring(1) : rawPath)
             : '(PR-level comment)';
-        const startLine = thread.threadContext?.rightFileStart?.line;
-        const startCol = thread.threadContext?.rightFileStart?.offset;
-        const endLine = thread.threadContext?.rightFileEnd?.line;
-        const endCol = thread.threadContext?.rightFileEnd?.offset;
+        const startLine = context?.startLine ?? thread.threadContext?.rightFileStart?.line ?? thread.threadContext?.leftFileStart?.line;
+        const startCol = context?.startCol ?? thread.threadContext?.rightFileStart?.offset ?? thread.threadContext?.leftFileStart?.offset;
+        const endLine = context?.endLine ?? thread.threadContext?.rightFileEnd?.line ?? thread.threadContext?.leftFileEnd?.line;
+        const endCol = context?.endCol ?? thread.threadContext?.rightFileEnd?.offset ?? thread.threadContext?.leftFileEnd?.offset;
 
         let location: string;
         if (startLine) {

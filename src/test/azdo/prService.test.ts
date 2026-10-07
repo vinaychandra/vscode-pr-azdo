@@ -35,6 +35,26 @@ suite('PullRequestService — getPullRequest', () => {
     });
 });
 
+suite('PullRequestService - getPrThreads', () => {
+    test('requests positions tracked to the selected iteration comparison, including Base', async () => {
+        const calls: unknown[][] = [];
+        const service = createService({
+            getThreads: async (...args: unknown[]) => {
+                calls.push(args);
+                return [];
+            },
+        });
+        await service.getPrThreads(42, 3, 2);
+        await service.getPrThreads(42, 2, 0);
+        await service.getPrThreads(42);
+        assert.deepStrictEqual(calls, [
+            ['repo', 42, 'project', 3, 2],
+            ['repo', 42, 'project', 2, 0],
+            ['repo', 42, 'project', undefined, undefined],
+        ]);
+    });
+});
+
 suite('PullRequestService — getFileContents', () => {
     test('resolves all path versions and downloads their blobs in two API calls', async () => {
         const zip = new JSZip();

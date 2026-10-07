@@ -28,7 +28,7 @@ export function registerPrTools(
                     ]);
                 }
 
-                const text = contextProvider.formatThreadForPrompt(ctx.thread);
+                const text = contextProvider.formatThreadForPrompt(ctx.thread, ctx);
                 log.appendLine(`[tool] getCommentThread: returning ${ctx.thread.comments?.length ?? 0} comments for ${ctx.filePath}`);
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart(text),

@@ -1342,6 +1342,7 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
 
     test('loads snapshot files relative to the selected iteration', async () => {
         const changeCalls: unknown[][] = [];
+        const threadCalls: unknown[][] = [];
         const snapshotService = createMockPrService({
             getPrIterations: async () => [
                 { id: 1, sourceRefCommit: { commitId: 'old-source' } },
@@ -1350,6 +1351,10 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
             getPrIterationChanges: async (...args: unknown[]) => {
                 changeCalls.push(args);
                 return { changeEntries: [] };
+            },
+            getPrThreads: async (...args: unknown[]) => {
+                threadCalls.push(args);
+                return [];
             },
         });
         const harness = makeMutableGitApi('local/main', 'local-commit');
@@ -1367,6 +1372,9 @@ suite('ActivePrTreeDataProvider — branch-change gating', () => {
         await provider.getChildren(root);
 
         assert.deepStrictEqual(changeCalls, [[42, 2, 1]]);
+        assert.deepStrictEqual(threadCalls, [[42, 2, 1]]);
+        await provider.refreshThreadsOnly();
+        assert.deepStrictEqual(threadCalls, [[42, 2, 1], [42, 2, 1]]);
 
         provider.dispose();
         harness.dispose();
