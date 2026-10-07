@@ -13,6 +13,7 @@ export interface GetTokenOptions {
     /**
      * Force a brand-new session even if one is cached.
      * Used when the current session failed against the target AzDO org.
+    * Ignored when silent is true.
      */
     forceNew?: boolean;
 }

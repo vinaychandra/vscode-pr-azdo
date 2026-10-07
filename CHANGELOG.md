@@ -12,6 +12,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Fixed
 
+- Expired review sessions now reconnect silently by default, including tenant-scoped recovery and concurrent requests. Background refreshes no longer fall back to interactive authentication or recurring expiry notifications; Sign In and Switch Account remain explicit user actions, including for repository-free reviews.
 - Draft publishing now forwards the selected iteration comparison and file change-tracking ID in all publish handlers, preventing comments on historical iterations from being attached to the latest iteration. This regression was reproduced by the live suite.
 - AI review and comment-resolution actions now start a Local chat session when VS Code offers multiple harnesses, avoiding unavailable `agent-host-copilotcli` models in the extension's chat participant. The user's default harness is unchanged.
 - Chat tools now receive the request's invocation token, and parallel tool calls and results remain grouped in matching conversation turns.

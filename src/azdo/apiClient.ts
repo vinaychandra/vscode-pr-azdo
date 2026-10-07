@@ -7,6 +7,13 @@ import type { IAuthProvider } from './auth/iAuthProvider';
 import type { ParsedAzDoRemote } from './remoteInfo';
 import { discoverOrgTenantId } from './auth/tenantDiscovery';
 
+export class AuthenticationRequiredError extends Error {
+    constructor() {
+        super('Authentication required. Please sign in first.');
+        this.name = 'AuthenticationRequiredError';
+    }
+}
+
 /** Error subclass surfaced when the current token cannot access the target org. */
 export class TenantMismatchError extends Error {
     constructor(
@@ -66,15 +73,25 @@ export class AzDoApiClient implements vscode.Disposable {
     }
 
     /** Get (or create) the underlying WebApi connection. */
-    private async getConnection(): Promise<azdev.WebApi> {
+    private async getConnection(interactive = false): Promise<azdev.WebApi> {
         if (this._connection) {
             return this._connection;
         }
+        if (this._authRecoveryPromise) {
+            if (await this._authRecoveryPromise && this._connection) {
+                return this._connection;
+            }
+            if (!interactive) { throw new AuthenticationRequiredError(); }
+        }
         // If another caller already started connecting, piggyback on that promise
         if (this._connectingPromise) {
-            return this._connectingPromise;
+            try {
+                return await this._connectingPromise;
+            } catch (error) {
+                if (!interactive || !isAuthError(error)) { throw error; }
+            }
         }
-        this._connectingPromise = this.doConnect();
+        this._connectingPromise = this.doConnect(interactive);
         try {
             return await this._connectingPromise;
         } finally {
@@ -83,12 +100,12 @@ export class AzDoApiClient implements vscode.Disposable {
     }
 
     /** Internal connection logic — only one instance runs at a time. */
-    private async doConnect(): Promise<azdev.WebApi> {
+    private async doConnect(interactive: boolean): Promise<azdev.WebApi> {
 
         this.log.appendLine('[api] Acquiring token for new connection…');
-        const token = await this.authProvider.getToken({ tenantId: this._tenantId });
+        const token = await this.authProvider.getToken({ tenantId: this._tenantId, silent: !interactive });
         if (!token) {
-            throw new Error('Authentication required. Please sign in first.');
+            throw new AuthenticationRequiredError();
         }
 
         this.log.appendLine('[api] Creating WebApi connection…');
@@ -106,7 +123,7 @@ export class AzDoApiClient implements vscode.Disposable {
                 this.log.appendLine(
                     `[api] Connection validation failed (auth error) — attempting tenant discovery…`,
                 );
-                return this.retryWithTenantDiscovery();
+                return this.retryWithTenantDiscovery(interactive);
             }
             throw err;
         }
@@ -120,7 +137,7 @@ export class AzDoApiClient implements vscode.Disposable {
      * Discover the org's tenant, get a tenant-scoped token, and retry.
      * Called at most once per connection attempt.
      */
-    private async retryWithTenantDiscovery(): Promise<azdev.WebApi> {
+    private async retryWithTenantDiscovery(interactive: boolean): Promise<azdev.WebApi> {
         const tenantId = await discoverOrgTenantId(
             this.remoteInfo.apiBaseUrl,
             this.log,
@@ -139,7 +156,7 @@ export class AzDoApiClient implements vscode.Disposable {
         );
         const token = await this.authProvider.getToken({
             tenantId,
-            forceNew: true,
+            silent: !interactive,
         });
         if (!token) {
             throw new TenantMismatchError(this.remoteInfo.organization, tenantId);
@@ -167,12 +184,12 @@ export class AzDoApiClient implements vscode.Disposable {
      * Get the authenticated user's identity ID.
      * Cached after the first call.
      */
-    async getCurrentUserId(): Promise<string> {
+    async getCurrentUserId(interactive = false): Promise<string> {
         if (this._connectionData?.authenticatedUser?.id) {
             return this._connectionData.authenticatedUser.id;
         }
 
-        const conn = await this.getConnection();
+        const conn = await this.getConnection(interactive);
         // Connection data is already populated by getConnection()'s validate step,
         // but defensively re-fetch if somehow missing.
         if (!this._connectionData) {
@@ -200,29 +217,17 @@ export class AzDoApiClient implements vscode.Disposable {
      * established, `false` if no valid token is available.
      */
     async tryConnectSilently(): Promise<boolean> {
-        if (this._connection) { return true; }
-
         this.log.appendLine('[api] Attempting silent connection…');
-        const token = await this.authProvider.getToken({ silent: true, tenantId: this._tenantId });
-        if (!token) {
-            this.log.appendLine('[api] No cached token available (silent mode).');
-            return false;
-        }
-
-        const handler = azdev.getBearerHandler(token);
-        const conn = new azdev.WebApi(this.remoteInfo.apiBaseUrl, handler);
-
         try {
-            this._connectionData = await conn.connect();
+            await this.getConnection();
         } catch (err: unknown) {
             if (isAuthError(err)) {
-                this.log.appendLine('[api] Silent connection failed (auth error) — skipping tenant discovery in silent mode.');
+                this.log.appendLine('[api] Silent connection unavailable — sign-in remains a user action.');
                 return false;
             }
             throw err;
         }
 
-        this._connection = conn;
         this.log.appendLine('[api] Silent connection established.');
         return true;
     }
@@ -233,7 +238,7 @@ export class AzDoApiClient implements vscode.Disposable {
         try {
             return await operation();
         } catch (err) {
-            if (!isAuthError(err)) {
+            if (err instanceof AuthenticationRequiredError || !isAuthError(err)) {
                 throw err;
             }
 
@@ -307,6 +312,12 @@ export class AzDoApiClient implements vscode.Disposable {
 /** Check whether an error looks like an auth/authorization failure. */
 export function isAuthError(err: unknown): boolean {
     if (!err) { return false; }
+    if (err instanceof AuthenticationRequiredError || err instanceof TenantMismatchError) { return true; }
+    if (typeof err === 'object') {
+        const status = (err as { statusCode?: unknown; status?: unknown }).statusCode
+            ?? (err as { status?: unknown }).status;
+        if (status === 401 || status === 403) { return true; }
+    }
     const msg = String(err);
     // Standard HTTP codes
     if (/\b(401|403|unauthorized|forbidden)\b/i.test(msg)) { return true; }

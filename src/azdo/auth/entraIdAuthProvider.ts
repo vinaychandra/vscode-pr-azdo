@@ -24,7 +24,10 @@ export class EntraIdAuthProvider implements IAuthProvider {
 
     private readonly _disposables: vscode.Disposable[] = [];
 
-    constructor(private readonly log: vscode.OutputChannel) {
+    constructor(
+        private readonly log: vscode.OutputChannel,
+        private readonly getSession: (providerId: string, scopes: readonly string[], options: vscode.AuthenticationGetSessionOptions) => Thenable<vscode.AuthenticationSession | undefined> = vscode.authentication.getSession,
+    ) {
         this._disposables.push(
             vscode.authentication.onDidChangeSessions(e => {
                 if (e.provider.id === 'microsoft') {
@@ -50,9 +53,9 @@ export class EntraIdAuthProvider implements IAuthProvider {
         try {
             // If caller requested a forced new session (e.g. after tenant mismatch),
             // skip the silent path and go straight to interactive with forceNewSession.
-            if (forceNew) {
+            if (forceNew && !silent) {
                 this.log.appendLine('[auth:entra] Forcing new session…');
-                const session = await vscode.authentication.getSession('microsoft', scopes, {
+                const session = await this.getSession('microsoft', scopes, {
                     forceNewSession: {
                         detail: tenantId
                             ? `The current session does not have access to this Azure DevOps organization. Re-authenticating against tenant ${tenantId}.`
@@ -71,7 +74,7 @@ export class EntraIdAuthProvider implements IAuthProvider {
             }
 
             // First try silent — no user prompt
-            let session = await vscode.authentication.getSession('microsoft', scopes, {
+            let session = await this.getSession('microsoft', scopes, {
                 silent: true,
             });
 
@@ -89,7 +92,7 @@ export class EntraIdAuthProvider implements IAuthProvider {
 
             // Prompt the user
             this.log.appendLine('[auth:entra] No cached session — prompting user…');
-            session = await vscode.authentication.getSession('microsoft', scopes, {
+            session = await this.getSession('microsoft', scopes, {
                 createIfNone: true,
             });
 

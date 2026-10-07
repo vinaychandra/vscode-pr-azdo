@@ -169,6 +169,27 @@ export async function activate(context: vscode.ExtensionContext) {
 		return pinnedSnapshotReview?.externalApiClient ?? apiClient;
 	}
 
+	function recoverReviewAuthentication(client: AzDoApiClient | undefined): void {
+		if (!client) { return; }
+		const now = Date.now();
+		if (now - lastAutoRecoveryTime < 30_000) { return; }
+		lastAutoRecoveryTime = now;
+		outputChannel.appendLine('[ext] Auth unavailable — attempting silent recovery without prompting.');
+		void client.tryConnectSilently().then(connected => {
+			void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:isAuthenticated', connected);
+			outputChannel.appendLine(connected
+				? '[ext] Silent recovery succeeded.'
+				: '[ext] Silent recovery unavailable — Sign In remains available in the panel.');
+			proxyEmitter.fire();
+			activePrProxyEmitter.fire();
+		}).catch(error => {
+			outputChannel.appendLine(`[ext] Silent recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+			void vscode.commands.executeCommand('setContext', 'vscode-pr-azdo:isAuthenticated', false);
+			proxyEmitter.fire();
+			activePrProxyEmitter.fire();
+		});
+	}
+
 	function getReviewRemoteInfo(): ParsedAzDoRemote | undefined {
 		return pinnedSnapshotReview?.externalRemoteInfo ?? detector.currentRemoteInfo;
 	}
@@ -507,7 +528,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				attachActivePrProvider(
 					externalPrService,
 					externalApiClient.getCurrentUserId().catch(() => undefined),
-					() => vscode.window.showInformationMessage('Azure DevOps session expired. Run the URL review command to sign in again.'),
+					() => recoverReviewAuthentication(externalApiClient),
 				);
 			}
 			activePrProvider!.pinSnapshotReview(
@@ -871,21 +892,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				activePrProvider?.refresh();
 				proxyEmitter.fire();
 				return apiClient!.getCurrentUserId().catch(err => {
-					if (err instanceof TenantMismatchError) {
-						outputChannel.appendLine(`[ext] Tenant mismatch: ${err.message}`);
-						void vscode.window.showErrorMessage(
-							`Authentication failed for Azure DevOps organization "${err.organization}". ` +
-							(err.discoveredTenantId
-								? `The organization requires tenant ${err.discoveredTenantId}, but your current session doesn't have access. `
-								: 'Your current session may be for the wrong Entra tenant. ') +
-							'This is common with multi-tenant Microsoft accounts.',
-							'Switch Account',
-						).then(action => {
-							if (action === 'Switch Account') {
-								void vscode.commands.executeCommand('vscode-pr-azdo.switchAccount');
-							}
-						});
-					}
+					outputChannel.appendLine(`[ext] Unable to read identity silently: ${err instanceof Error ? err.message : String(err)}`);
 					return undefined;
 				});
 			}).catch(err => {
@@ -900,46 +907,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			});
 
 			prService = new PullRequestService(apiClient, info);
-			const handleAuthError = () => {
-				const now = Date.now();
-				if (now - lastAutoRecoveryTime < 30_000) {
-					outputChannel.appendLine('[ext] Auth error detected but skipping auto-recovery (cooldown).');
-					return;
-				}
-				lastAutoRecoveryTime = now;
-				outputChannel.appendLine('[ext] Auth error detected — attempting silent re-auth…');
-				// Keep tenant cache — the org's tenant hasn't changed, only the token expired.
-				apiClient?.resetConnection();
-
-				// Try to reconnect silently (VS Code may have refreshed the token).
-				// If that fails, just update the UI so "Sign In" items appear.
-				void apiClient?.tryConnectSilently().then(connected => {
-					void vscode.commands.executeCommand(
-						'setContext', 'vscode-pr-azdo:isAuthenticated', connected,
-					);
-					if (connected) {
-						outputChannel.appendLine('[ext] Silent re-auth succeeded.');
-						// Re-fire so tree views refresh with real data
-						proxyEmitter.fire();
-						activePrProxyEmitter.fire();
-					} else {
-						outputChannel.appendLine('[ext] Silent re-auth failed — showing sign-in prompt in tree views.');
-						proxyEmitter.fire();
-						activePrProxyEmitter.fire();
-						vscode.window.showInformationMessage(
-							'Azure DevOps PR: Session expired. Click "Sign In" in the panel to re-authenticate.',
-						);
-					}
-				}).catch(err => {
-					const msg = err instanceof Error ? err.message : String(err);
-					outputChannel.appendLine(`[ext] Silent re-auth failed unexpectedly: ${msg}`);
-					void vscode.commands.executeCommand(
-						'setContext', 'vscode-pr-azdo:isAuthenticated', false,
-					);
-					proxyEmitter.fire();
-					activePrProxyEmitter.fire();
-				});
-			};
+			const workspaceClient = apiClient;
+			const handleAuthError = () => recoverReviewAuthentication(workspaceClient);
 			treeProvider = new PrTreeDataProvider(prService, apiClient, outputChannel, handleAuthError);
 			context.subscriptions.push(treeProvider);
 
@@ -955,7 +924,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			attachActivePrProvider(
 				pinnedSnapshotReview.externalPrService,
 				pinnedSnapshotReview.externalApiClient.getCurrentUserId().catch(() => undefined),
-				() => vscode.window.showInformationMessage('Azure DevOps session expired. Refresh the active pull request to sign in again.'),
+				() => recoverReviewAuthentication(pinnedSnapshotReview?.externalApiClient),
 			);
 		} else {
 			outputChannel.appendLine('[ext] No remote info — tree providers not created');
@@ -2425,6 +2394,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				const externalApiClient = new AzDoApiClient(authProvider, externalRemoteInfo, outputChannel, tenantCache);
 				const externalPrService = new PullRequestService(externalApiClient, externalRemoteInfo);
 				try {
+					await externalApiClient.getCurrentUserId(true);
 					const pr = await vscode.window.withProgress(
 						{ location: vscode.ProgressLocation.Notification, title: `Loading ${parsed.repositoryName} PR #${parsed.pullRequestId}…` },
 						() => externalPrService.getPullRequest(parsed.pullRequestId),
@@ -3090,15 +3060,16 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('vscode-pr-azdo.signIn', async () => {
 			outputChannel.appendLine('[ext] signIn: user-initiated sign in…');
 			suppressAutoExpand = false;
-			if (!apiClient) {
+			const client = getReviewApiClient();
+			if (!client) {
 				vscode.window.showWarningMessage('Azure DevOps PR: No Azure DevOps remote detected.');
 				return;
 			}
-			apiClient.resetConnection();
+			client.resetConnection();
 			try {
 				// getCurrentUserId() → getConnection() → doConnect(), which
 				// handles tenant discovery and interactive prompts.
-				await apiClient.getCurrentUserId();
+				await client.getCurrentUserId(true);
 				void vscode.commands.executeCommand(
 					'setContext', 'vscode-pr-azdo:isAuthenticated', true,
 				);
@@ -3139,8 +3110,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			// Pass the cached tenant ID so the forced session targets the correct
 			// Entra tenant — avoids a scope mismatch that would cause
 			// tryConnectSilently to fail after rebuild.
-			const cachedTenantId = tenantCache.get(detector.currentRemoteInfo?.organization ?? '');
-			apiClient?.resetConnection();
+			const cachedTenantId = tenantCache.get(getReviewRemoteInfo()?.organization ?? '');
+			getReviewApiClient()?.resetConnection();
 			const token = await authProvider.getToken({ forceNew: true, tenantId: cachedTenantId });
 			if (token) {
 				void vscode.commands.executeCommand(

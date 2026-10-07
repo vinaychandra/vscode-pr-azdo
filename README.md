@@ -139,7 +139,9 @@ Existing values from the deprecated `vscode-pr-azdo.prompts.review` setting are 
 
 The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in Microsoft authentication provider. Sign in via the Command Palette or the welcome view prompt.
 
-**Multi-tenant accounts:** If your Microsoft account belongs to multiple Entra tenants, the extension automatically discovers the correct tenant for the Azure DevOps organization and re-authenticates. If automatic discovery fails, use the "Switch Account / Tenant" command from the Command Palette to force a fresh login.
+**Token expiry:** API requests silently reacquire a token through Microsoft's authentication provider and retry once when authorization expires. Concurrent requests share reconnection, and background refreshes never open sign-in dialogs or recurring expiry notifications. If silent renewal is unavailable (for example, MFA or revoked access), Sign In remains available in the panel; authentication becomes interactive only after an explicit sign-in, account-switch, or initial URL-review action.
+
+**Multi-tenant accounts:** If your Microsoft account belongs to multiple Entra tenants, the extension automatically discovers the correct tenant for the Azure DevOps organization and first tries a cached tenant-scoped session silently. If that is unavailable, use Sign In or "Switch Account / Tenant" from the Command Palette to authenticate explicitly.
 
 ## Extension Commands
 
