@@ -6,6 +6,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-10-19
+
 ### Changed
 
 - AI reviews and comment resolution now use the Copilot harness with a bundled, tool-restricted Azure DevOps Review agent instead of the Local-only `@azdo-pr` participant. Review lenses, local Git scopes, standalone reviews, quick summaries, and comment explanations remain available without changing the user's default harness or global tool selection.
@@ -22,6 +24,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - AI draft sides, multiline ranges, change-tracking IDs, source/base revisions, and iteration comparisons now survive publishing, iteration changes, and persistence. Draft navigation opens the captured revision.
 - Local-change AI drafts use frozen code snapshots and cannot be accidentally published against unrelated server-side PR lines.
+- Updated development dependencies `brace-expansion` and `shell-quote` to address npm audit advisories.
 
 ## [0.0.17] - 2026-10-06
 

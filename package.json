@@ -3,7 +3,7 @@
   "publisher": "vinaydommeti",
   "displayName": "Azure DevOps - Code Reviews",
   "description": "Azure DevOps - Code Review Experience",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "author": {
     "name": "Vinay Dommeti"
   },
@@ -524,7 +524,9 @@
     "chatAgents": [
       {
         "path": "./resources/agents/azdo-review.agent.md",
-        "sessionTypes": ["agent-host-copilotcli"]
+        "sessionTypes": [
+          "agent-host-copilotcli"
+        ]
       }
     ],
     "languageModelTools": [
@@ -537,10 +539,29 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "kind": { "type": "string", "enum": ["review", "quick"] },
-            "mode": { "type": "string", "enum": ["vs-target", "staged", "unstaged", "all-uncommitted", "unpushed-commits"] },
-            "lensId": { "type": "string" }
+            "runId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "review",
+                "quick"
+              ]
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "vs-target",
+                "staged",
+                "unstaged",
+                "all-uncommitted",
+                "unpushed-commits"
+              ]
+            },
+            "lensId": {
+              "type": "string"
+            }
           }
         }
       },
@@ -553,13 +574,36 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "path": { "type": "string", "description": "Repository-relative path." },
-            "view": { "type": "string", "enum": ["source", "base", "diff", "comment", "checkout"] },
-            "startLine": { "type": "integer", "minimum": 1 },
-            "endLine": { "type": "integer", "minimum": 1 }
+            "runId": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string",
+              "description": "Repository-relative path."
+            },
+            "view": {
+              "type": "string",
+              "enum": [
+                "source",
+                "base",
+                "diff",
+                "comment",
+                "checkout"
+              ]
+            },
+            "startLine": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "endLine": {
+              "type": "integer",
+              "minimum": 1
+            }
           },
-          "required": ["runId", "path"]
+          "required": [
+            "runId",
+            "path"
+          ]
         }
       },
       {
@@ -571,11 +615,20 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "directory": { "type": "string" },
-            "offset": { "type": "integer", "minimum": 0 }
+            "runId": {
+              "type": "string"
+            },
+            "directory": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
-          "required": ["runId"]
+          "required": [
+            "runId"
+          ]
         }
       },
       {
@@ -587,12 +640,28 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "query": { "type": "string", "minLength": 1 },
-            "paths": { "type": "array", "items": { "type": "string" } },
-            "offset": { "type": "integer", "minimum": 0 }
+            "runId": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
-          "required": ["runId", "query"]
+          "required": [
+            "runId",
+            "query"
+          ]
         }
       },
       {
@@ -604,24 +673,58 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
+            "runId": {
+              "type": "string"
+            },
             "findings": {
               "type": "array",
               "items": {
                 "type": "object",
                 "properties": {
-                  "path": { "type": "string" },
-                  "line": { "type": "integer", "minimum": 1 },
-                  "endLine": { "type": "integer", "minimum": 1 },
-                  "side": { "type": "string", "enum": ["left", "right"] },
-                  "type": { "type": "string", "enum": ["suggestion", "issue", "nitpick", "question"] },
-                  "body": { "type": "string", "minLength": 1 }
+                  "path": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "endLine": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "side": {
+                    "type": "string",
+                    "enum": [
+                      "left",
+                      "right"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "suggestion",
+                      "issue",
+                      "nitpick",
+                      "question"
+                    ]
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1
+                  }
                 },
-                "required": ["path", "line", "body"]
+                "required": [
+                  "path",
+                  "line",
+                  "body"
+                ]
               }
             }
           },
-          "required": ["runId", "findings"]
+          "required": [
+            "runId",
+            "findings"
+          ]
         }
       },
       {
@@ -633,10 +736,18 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "body": { "type": "string", "minLength": 1 }
+            "runId": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1
+            }
           },
-          "required": ["runId", "body"]
+          "required": [
+            "runId",
+            "body"
+          ]
         }
       },
       {
@@ -648,12 +759,26 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "runId": { "type": "string" },
-            "path": { "type": "string" },
-            "original": { "type": "string", "minLength": 1 },
-            "replacement": { "type": "string" }
+            "runId": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "original": {
+              "type": "string",
+              "minLength": 1
+            },
+            "replacement": {
+              "type": "string"
+            }
           },
-          "required": ["runId", "path", "original", "replacement"]
+          "required": [
+            "runId",
+            "path",
+            "original",
+            "replacement"
+          ]
         }
       }
     ],
