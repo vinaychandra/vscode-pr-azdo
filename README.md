@@ -82,23 +82,32 @@ When code has changed since a comment was made, click the **$(git-compare)** but
 - **Review Pull Request** button to choose a current-repository, worktree, or no-checkout review from the detail panel
 - Direct link to the PR on Azure DevOps
 
-### AI Assistant (`@azdo-pr`)
+### AI Reviews with the Copilot Harness
 
-A Copilot Chat participant that helps resolve PR comments and review code:
+AI actions open a new **Copilot** harness session with the bundled **Azure DevOps Review** agent. The Local harness and the old `@azdo-pr` participant are no longer used. Your default harness and profile-wide tool selection are not changed.
 
-AI review and comment-resolution actions open a new **Local** chat session when VS Code offers multiple chat harnesses. The Copilot CLI harness uses agent-host models that are not available through this extension's chat participant API. Your default harness setting is not changed. When entering `@azdo-pr` commands manually, use the Local harness.
+The agent is restricted to this extension's review tools: reading the selected comparison, listing directories, searching specified files, creating editable local drafts, drafting replies, and proposing code fixes. It has no terminal, workspace-editing, publishing, voting, or thread-resolution tool.
 
-- **`/fix`** — analyze a comment thread and suggest a code fix, a reply, or both
-- **`/explain`** — explain what a comment is asking for
-- **`/review`** — full AI code review of all changed files with inline draft comments
-- **`/review-quick`** — high-level summary of PR changes and key concerns
+- **Review with Copilot** — detailed review of the selected comparison, with structured findings returned as editable inline AI draft comments
+- **Quick Review with Copilot** — high-level summary and concerns, without creating drafts or fixes
+- **Resolve with Copilot** — analyze a thread in its original code context and draft a reply, propose a code fix, or both
+- **Explain with Copilot** — explain a comment without creating drafts or changing files
+- **Perform AI Review** — standalone branch review when no PR is active
 - **Review Lenses** — every **Review with Copilot** run starts by choosing a focused review style: General, Bugs, Security, Architecture, Performance, or one of your custom lenses
 - **Context-aware review scope** — when your working tree is dirty or has unpushed commits, a QuickPick lets you choose exactly what to review: staged changes, unstaged changes, all uncommitted changes, unpushed commits only, or everything vs the remote target
-- **Apply Suggestion** button — appears when the AI (or an AzDO suggestion block) proposes a code change; applying requires a current-repository or worktree checkout because it edits local files
-- **Post Reply** button — post an AI-drafted reply directly to Azure DevOps; the reply is prefilled as an editable inline comment so you can review and edit it in context before posting
-- Uses workspace tools for checked-out reviews and commit-backed read/search tools for no-checkout reviews
-- **Honors Copilot instruction files** — automatically reads `.github/copilot-instructions.md`, `**/.instructions.md`, and `.copilot/` directory contents before responding, so your repo-level and directory-scoped coding guidelines are respected
+- **User-approved fixes** — a proposed fix offers **Preview AI Fix**, opens a diff, and requires explicit approval before applying. The original code must match exactly once; changed files and stale reviews are rejected. Fixes require the current repository or a review worktree. Applied changes remain normal editor changes for you to save.
+- **Editable replies** — AI replies appear in their exact comment thread as local drafts. Review, edit, publish, or dismiss them using the normal comment controls. Existing reply drafts are not overwritten.
+- **No-checkout and repository-free AI review** — reads exact Azure DevOps source/base revisions and can create inline review drafts and reply drafts without cloning or switching branches. Code fixes still require a checkout.
+- **Historical and local-change accuracy** — findings retain their original side, range, commits, and iteration metadata, including after restoring persisted drafts. Staged/unpushed/working-tree findings open their captured code rather than an unrelated PR snapshot. These local-change drafts are not publishable: update the PR and review its published snapshot before posting.
+- **Run isolation** — repository, PR, branch, and comparison changes invalidate old AI tool calls. Repeated findings are deduplicated. Review runs and unapplied fix proposals expire when the extension reloads.
+- **Repository guidance** — the agent is instructed to inspect applicable `AGENTS.md`, `.github/copilot-instructions.md`, scoped `.instructions.md`, and `.copilot/` guidance through the review tools
 - Customizable comment-resolution and quick-review prompts via settings (`vscode-pr-azdo.prompts.*`)
+
+You can also select **Azure DevOps Review** in a Copilot session and ask it to review the active PR. The context tool can start a detailed or quick review with an optional scope and lens. Keep the editor window connected: extension tools and native comments are provided by that window, even if the Copilot session itself can continue in the background.
+
+Directory listings and file reads can inspect surrounding repository code at the reviewed revision. Search defaults to changed source files, or searches explicitly supplied paths; it is not a repository-wide search. Read, directory, and search results report pagination instead of silently truncating.
+
+If Copilot is unavailable, AI actions report an error rather than falling back to Local. Manual diffs, comments, drafts, replies, thread status changes, and votes remain independent of AI.
 
 ### Review Lenses
 
@@ -132,8 +141,9 @@ Existing values from the deprecated `vscode-pr-azdo.prompts.review` setting are 
 ## Requirements
 
 - **VS Code** 1.110.0 or later
+- **AI actions** require a VS Code build with the Copilot harness and extension-tool support (validated on 1.142.0), enabled Copilot Chat, model access, and the extension's review tools enabled
 - **Git** — the VS Code built-in Git extension must be active
-- A local clone of an **Azure DevOps** Git repository (supports `dev.azure.com` and `visualstudio.com` remotes, HTTPS and SSH)
+- An **Azure DevOps** Git repository or pull request URL (supports `dev.azure.com` and `visualstudio.com` remotes, HTTPS and SSH). A local clone is needed for local-change reviews and code fixes, not for repository-free PR reviews.
 
 ### Authentication
 
@@ -160,11 +170,32 @@ The extension uses **Entra ID (Azure AD)** authentication via VS Code's built-in
 | `Stop No-Checkout Review`                  | Return the Active PR view to current-branch detection |
 | `Delete Local Branch`                      | Delete the checked-out PR branch (with force option) |
 | `Review with Copilot`                      | Start an AI code review of the active PR             |
+| `Azure DevOps PR: Quick Review with Copilot` | Summarize the active PR without creating drafts      |
+| `Azure DevOps PR: Preview AI Fix`           | Preview a proposed code fix before applying          |
+| `Azure DevOps PR: Apply AI Fix`             | Preview and explicitly approve a proposed fix        |
 | `Azure DevOps PR: Manage Review Lenses`    | Create, edit, or delete global custom review lenses  |
 | `Azure DevOps PR: Reset AI Prompts`        | Reset custom AI prompts to defaults                  |
 | `Azure DevOps PR: View Default Prompts`    | View the built-in system prompts                     |
 
-## Live Tests
+## Copilot Harness Smoke Test
+
+The opt-in Copilot smoke test uses a real model and can consume Copilot usage. It reviews only a synthetic, local-only repository under `.vscode-test/copilot/workspace`; that repository has no configured remotes. No Azure DevOps PR is created, no code is pushed, and no comment is published.
+
+First prepare the isolated VS Code profile and sign into Copilot:
+
+```sh
+npm run test:copilot:signin
+```
+
+Close that window after signing in, then run:
+
+```sh
+npm run test:copilot
+```
+
+Approve the extension's review tools if prompted. The test opens an actual Copilot-harness review, waits for a model-generated inline draft on the deliberately defective code, opens the native captured-code document, and verifies that HEAD, branch/remote/tag refs, staged content, and the working file are unchanged. Copilot can create its own local checkpoints under `refs/agents`; these harness-owned refs are reported separately. Results are recorded under `.vscode-test/copilot`. The runner refuses to reset a modified fixture or use one with configured remotes.
+
+## Live Azure DevOps Tests
 
 Live integration tests are opt-in and target only [E2ETestRepo](https://dev.azure.com/vinaychandra/Personal/_git/E2ETestRepo). They are not included in `npm test` and do not use Playwright.
 
@@ -192,7 +223,7 @@ The runner builds the extension, opens a pinned VS Code development host, runs M
 
 Each run creates unique `azdo-live/run-*` branches and files under `.azdo-live/run-*`. An empty repository is initialized with a permanent `main` README; an existing default branch is not modified. Abandoned PRs remain as an audit trail. Results and ownership ledgers are saved under `.vscode-test/live/results`; credentials are never written to those files. Interrupted runs are recovered only after validating their recorded repository, PR refs, and commit IDs. Cleanup refuses to delete a branch changed outside the recorded run.
 
-This suite seeds an AI draft to test publishing, rather than calling a real model. Copilot generation/harness behavior, visual rendering, checkout/worktree flows, and restart persistence still need separate smoke tests. Close the isolated sign-in/test window before starting another run.
+This suite feeds seeded findings through the Copilot review service to test draft creation, deduplication, and publishing without calling a model. Use `test:copilot` for real Copilot generation and harness coverage. Visual rendering, checkout/worktree flows, and full restart persistence still need separate smoke tests. Close the isolated sign-in/test window before starting another run.
 
 ## Known Issues
 

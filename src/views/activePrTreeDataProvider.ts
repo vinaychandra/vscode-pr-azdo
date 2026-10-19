@@ -266,10 +266,10 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
     }
 
     /** Optional callback to get draft comment summaries for tree display. */
-    private _draftProvider?: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[];
+    private _draftProvider?: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply'; uri?: vscode.Uri }[];
 
     /** Set the draft provider callback (typically from PrCommentController.getDraftSummaries). */
-    setDraftProvider(provider: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[]): void {
+    setDraftProvider(provider: () => { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply'; uri?: vscode.Uri }[]): void {
         this._draftProvider = provider;
     }
 
@@ -743,7 +743,7 @@ export class ActivePrTreeDataProvider implements vscode.TreeDataProvider<ActiveP
                 if (!draftsByFile.has(d.filePath)) {
                     draftsByFile.set(d.filePath, []);
                 }
-                draftsByFile.get(d.filePath)!.push(new DraftCommentItem(d.filePath, d.line, d.body, d.kind));
+                draftsByFile.get(d.filePath)!.push(new DraftCommentItem(d.filePath, d.line, d.body, d.kind, d.uri));
             }
             this.attachDraftsToFiles(this._fileTree, draftsByFile);
         }

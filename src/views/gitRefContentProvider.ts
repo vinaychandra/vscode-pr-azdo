@@ -15,6 +15,7 @@ import { fileContentKey } from '../azdo/prService';
  *   azdo-pr-git:///src/index.ts?ref=origin/main
  */
 export const GIT_CONTENT_SCHEME = 'azdo-pr-git';
+export const AI_REVIEW_CONTENT_SCHEME = 'azdo-pr-ai-review';
 
 /**
  * Provides readonly document content by running `git show {ref}:{path}`
@@ -23,6 +24,7 @@ export const GIT_CONTENT_SCHEME = 'azdo-pr-git';
 export class GitRefContentProvider implements vscode.TextDocumentContentProvider {
     private _cache = new Map<string, string>();
     private _apiContents: ReadonlyMap<string, string> | undefined;
+    private _draftContentReader: ((uri: vscode.Uri) => string | undefined) | undefined;
 
     constructor(
         private readonly log: vscode.OutputChannel,
@@ -35,6 +37,11 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
         const cached = this._cache.get(cacheKey);
         if (cached !== undefined) {
             return cached;
+        }
+        const draftContent = this._draftContentReader?.(uri);
+        if (draftContent !== undefined) {
+            this._cache.set(cacheKey, draftContent);
+            return draftContent;
         }
 
         const filePath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
@@ -84,13 +91,18 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
         this._apiContents = contents;
         this.clearCache();
     }
+
+    setDraftContentReader(reader: (uri: vscode.Uri) => string | undefined): void {
+        this._draftContentReader = reader;
+    }
 }
 
 /**
  * Build a URI for viewing a file at a specific git ref.
  */
 export function buildGitRefUri(filePath: string, ref: string): vscode.Uri {
-    return vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///${filePath}?ref=${encodeURIComponent(ref)}`);
+    const path = filePath.split('/').map(encodeURIComponent).join('/');
+    return vscode.Uri.parse(`${GIT_CONTENT_SCHEME}:///${path}?ref=${encodeURIComponent(ref)}`);
 }
 
 /**

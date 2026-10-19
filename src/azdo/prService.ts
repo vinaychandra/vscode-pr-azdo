@@ -71,7 +71,7 @@ export class PullRequestService {
     }
 
     /** Resolve many file versions at once, then download all unique blobs in one ZIP response. */
-    async getFileContents(requests: readonly FileContentRequest[]): Promise<Map<string, string>> {
+    async getFileContents(requests: readonly FileContentRequest[], requireAll = false): Promise<Map<string, string>> {
         if (requests.length === 0) {
             return new Map();
         }
@@ -107,7 +107,7 @@ export class PullRequestService {
                     const entry = entries.find(candidate => {
                         const fileName = candidate.name.split('/').pop()?.toLowerCase();
                         return fileName === normalizedId || candidate.name.toLowerCase().includes(normalizedId);
-                    }) ?? (entries.length === objectIds.length ? entries[index] : undefined);
+                    }) ?? (!requireAll && entries.length === objectIds.length ? entries[index] : undefined);
                     if (entry) {
                         contentByObjectId.set(objectId, await entry.async('string'));
                     }
@@ -117,12 +117,33 @@ export class PullRequestService {
             const result = new Map<string, string>();
             uniqueRequests.forEach((request, index) => {
                 const objectId = itemGroups[index]?.[0]?.objectId;
+                if (requireAll && (!objectId || !contentByObjectId.has(objectId))) {
+                    throw new Error(`File content is unavailable for ${request.path} at ${request.commitId}.`);
+                }
                 result.set(
                     fileContentKey(request.commitId, request.path),
                     objectId ? contentByObjectId.get(objectId) ?? '' : '',
                 );
             });
             return result;
+        });
+    }
+
+    async listFiles(commitId: string, directory: string): Promise<{ path: string; directory: boolean }[]> {
+        return this.withGitApi(async git => {
+            const items = await git.getItems(
+                this.remoteInfo.repositoryName, this.remoteInfo.project,
+                directory ? `/${directory}` : '/',
+                VersionControlRecursionType.OneLevel,
+                false, false, false, false,
+                { version: commitId, versionType: GitVersionType.Commit },
+            );
+            return items.flatMap(item => {
+                const path = item.path?.replace(/^\//, '');
+                return path && path !== directory
+                    ? [{ path, directory: !!item.isFolder }]
+                    : [];
+            });
         });
     }
 
@@ -273,7 +294,7 @@ export class PullRequestService {
                 requests.push({ path: comparisonPath, commitId: comparisonCommit });
             }
         }
-        const downloadedContents = await this.getFileContents(requests);
+        const downloadedContents = await this.getFileContents(requests, true);
         const contents = new Map(downloadedContents);
         for (const change of changes) {
             const currentPath = change.item?.path?.replace(/^\//, '');

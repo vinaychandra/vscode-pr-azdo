@@ -38,6 +38,13 @@ suite('buildGitRefUri', () => {
         const params = new URLSearchParams(uri.query);
         assert.strictEqual(params.get('ref'), 'origin/feature/my branch');
     });
+
+    test('keeps reserved filename characters in the path instead of the URI query or fragment', () => {
+        const uri = buildGitRefUri('src/file#name?.ts', 'source-sha');
+        assert.strictEqual(uri.path, '/src/file#name?.ts');
+        assert.strictEqual(uri.fragment, '');
+        assert.strictEqual(new URLSearchParams(uri.query).get('ref'), 'source-sha');
+    });
 });
 
 suite('GitRefContentProvider', () => {
@@ -91,6 +98,16 @@ suite('GitRefContentProvider', () => {
         const content = await provider.provideTextDocumentContent(uri, new vscode.CancellationTokenSource().token);
 
         assert.strictEqual(content, 'second');
+    });
+
+    test('restores captured AI draft code even when its comparison is no longer the active snapshot', async () => {
+        const provider = new GitRefContentProvider(createMockLog());
+        provider.setApiContents(new Map([[fileContentKey('new-source', 'src/app.ts'), 'new iteration']]));
+        provider.setDraftContentReader(uri => new URLSearchParams(uri.query).get('ref') === 'old-source' ? 'captured old iteration' : undefined);
+        const content = await provider.provideTextDocumentContent(
+            buildGitRefUri('src/app.ts', 'old-source'), new vscode.CancellationTokenSource().token,
+        );
+        assert.strictEqual(content, 'captured old iteration');
     });
 });
 

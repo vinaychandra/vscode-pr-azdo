@@ -12,19 +12,21 @@ import { ActivePrTreeDataProvider } from './views/activePrTreeDataProvider';
 import { FileChangeItem, FolderItem, ActivePrRootItem, SectionHeaderItem, type ActivePrTreeItem } from './views/activePrTreeItems';
 import { PrDetailPanel, buildCreatePrUrl, buildPrWebUrl } from './views/prDetailPanel';
 import { PrCommentController, PR_COMMENTS_SCHEME, type PersistedDrafts } from './views/prCommentController';
-import { GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
+import { AI_REVIEW_CONTENT_SCHEME, GitRefContentProvider, GIT_CONTENT_SCHEME, buildGitRefUri } from './views/gitRefContentProvider';
 import { computeRelativePath, extractPathFromGitRefUri, getSnapshotPathFromDiffInput, getWorkspaceFileUriFromDiffInput, isUriInChangedFiles, buildDiffParams } from './views/toggleFileDiffHelpers';
 import { VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PullRequestStatus, CommentThreadStatus, type GitPullRequest } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { PrContextProvider } from './chat/prContextProvider';
-import { AI_CHECKOUT_REQUIRED_MESSAGE, registerPrChatParticipant, DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT, runGitDiff, openPrChat } from './chat/prChatParticipant';
-import { registerPrTools } from './chat/prTools';
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REVIEW_QUICK_PROMPT } from './chat/reviewPrompts';
+import { CopilotReviewService, openCopilotReview, type ReviewStartOptions } from './chat/copilotReview';
+import { registerCopilotReviewTools } from './chat/copilotReviewTools';
+import { gitText, type ReviewTarget } from './chat/reviewContent';
 import { detectGitState, getReviewOptions, type ReviewQuickPickItem } from './git/gitStateDetector';
 import { areSamePaths, DEFAULT_REVIEW_WORKTREE_PATH, DirtyReviewWorktreeError, fetchPullRequestCommit, fetchPullRequestSnapshot, getPrimaryWorktreeRoot, prepareReviewWorktree, resolveReviewWorktreePath } from './git/reviewWorktree';
 import { reviewedFilesStateKey } from './views/reviewState';
 import { chooseCheckoutMode } from './views/checkoutMode';
 import { DraftPersistenceManager } from './views/draftPersistence';
-import { BUILT_IN_REVIEW_LENSES, REVIEW_PROTOCOL_PROMPT, ReviewLensService, buildReviewChatQuery } from './chat/reviewLenses';
+import { BUILT_IN_REVIEW_LENSES, REVIEW_PROTOCOL_PROMPT, ReviewLensService } from './chat/reviewLenses';
 import type { ParsedAzDoRemote } from './azdo/remoteInfo';
 
 const OUTPUT_CHANNEL_NAME = 'Azure DevOps PR';
@@ -36,6 +38,7 @@ export interface DevelopmentReviewApi {
 	readonly activePrProvider: ActivePrTreeDataProvider | undefined;
 	readonly commentController: PrCommentController;
 	readonly contextProvider: PrContextProvider;
+	readonly copilotReview: CopilotReviewService;
 }
 
 function externalReviewScope(parsed: ParsedAzDoPullRequestUrl): string {
@@ -140,6 +143,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	let activePrProvider: ActivePrTreeDataProvider | undefined;
 	let activePrProviderSub: vscode.Disposable | undefined;
 	let activePrCommentSub: vscode.Disposable | undefined;
+	let synchronizeReviewContext: (() => Promise<void>) | undefined;
 	let activePrTreeView: vscode.TreeView<ActivePrTreeItem> | undefined;
 	let lastAutoRecoveryTime = 0;
 	interface PinnedSnapshotReview {
@@ -158,6 +162,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		externalRemoteInfo?: ParsedAzDoRemote;
 		ownsApiClient?: boolean;
 		checkoutBacked?: boolean;
+		contents?: ReadonlyMap<string, string>;
+		originalPaths?: ReadonlyMap<string, string>;
 	}
 	let pinnedSnapshotReview: PinnedSnapshotReview | undefined;
 
@@ -218,7 +224,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(draftPersistence);
 	flushDraftSaves = () => draftPersistence.flush();
 
-	// --- AI Chat Participant & Context Provider ---
+	// --- Copilot review context and tools ---
 	const prContextProvider = new PrContextProvider();
 	const reviewLensService = new ReviewLensService(context, outputChannel);
 	try {
@@ -226,8 +232,120 @@ export async function activate(context: vscode.ExtensionContext) {
 	} catch (err) {
 		outputChannel.appendLine(`[review-lens] Initialization failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
-	registerPrChatParticipant(context, prContextProvider, commentController, outputChannel, gitApi, detector, reviewLensService);
-	registerPrTools(context, prContextProvider, outputChannel, gitApi, detector);
+	const copilotReview = new CopilotReviewService({
+		prepareTarget: prepareAiTarget,
+		currentTarget: currentAiTarget,
+		comments: commentController,
+		lenses: reviewLensService,
+		log: outputChannel,
+	});
+	context.subscriptions.push(copilotReview);
+	registerCopilotReviewTools(context, copilotReview, outputChannel);
+	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('azdo-pr-ai-fix', copilotReview));
+	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(AI_REVIEW_CONTENT_SCHEME, copilotReview));
+
+	async function withAiErrors(action: () => Promise<void>): Promise<void> {
+		try {
+			await action();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			outputChannel.appendLine(`[copilot] ${message}`);
+			void vscode.window.showErrorMessage(`Azure DevOps AI review: ${message}`);
+		}
+	}
+
+	function currentAiTarget(): ReviewTarget | undefined {
+		const repo = getActiveRepository(gitApi, detector);
+		const provider = activePrProvider;
+		const pr = provider?._activePrForContext;
+		const comparison = provider?.reviewContext;
+		if (!repo && !pr) { return undefined; }
+		const remote = getReviewRemoteInfo();
+		const snapshot = comparison?.mode === 'snapshot';
+		const checkoutBacked = !snapshot || !!comparison.checkoutBacked;
+		const root = snapshot && !checkoutBacked && pinnedSnapshotReview?.apiBacked
+			? undefined : repo?.rootUri;
+		return {
+			identity: JSON.stringify([
+				remote?.organization.toLowerCase(), remote?.project.toLowerCase(), remote?.repositoryName.toLowerCase(),
+				pr?.repository?.id, pr?.pullRequestId, root?.toString(),
+				snapshot, comparison?.sourceRef, comparison?.targetRef,
+				comparison?.iterationId, comparison?.compareToIterationId,
+				checkoutBacked ? repo?.state.HEAD?.commit : undefined,
+				checkoutBacked ? repo?.state.HEAD?.name : undefined,
+			]),
+			repositoryRoot: root, pr, snapshot, checkoutBacked,
+			sourceRef: comparison?.sourceRef,
+			targetRef: comparison?.targetRef ?? (pr?.targetRefName ? `origin/${pr.targetRefName.replace(/^refs\/heads\//, '')}` : undefined),
+			currentBranch: repo?.state.HEAD?.name,
+			iterationId: comparison?.iterationId,
+			compareToIterationId: comparison?.compareToIterationId,
+			filePaths: provider?.changedFilePaths ?? [],
+			changeTypes: provider?.changeTypes ?? new Map(),
+			contents: pinnedSnapshotReview?.contents,
+			originalPaths: pinnedSnapshotReview?.originalPaths,
+			service: getReviewPrService(),
+		};
+	}
+
+	async function prepareAiTarget(options: ReviewStartOptions): Promise<ReviewTarget> {
+		if (options.targetBranch) {
+			if (activePrProvider?._activePrForContext) {
+				throw new Error('Use Review with Copilot for the active PR, or stop its review before starting a standalone branch review.');
+			}
+			const target = currentAiTarget();
+			if (!target?.repositoryRoot) { throw new Error('No local repository is available.'); }
+			return { ...target, targetRef: `origin/${options.targetBranch}`, snapshot: false };
+		}
+		const provider = activePrProvider;
+		const pr = provider?._activePrForContext;
+		const initial = currentAiTarget();
+		const service = getReviewPrService();
+		if (!provider || !pr) { throw new Error('No active pull request. Open a PR or use Perform AI Review for a standalone branch.'); }
+		if ((options.mode ?? 'vs-target') === 'vs-target' && !options.localChanges) {
+			if (!await ensureImmutablePrDiff()) { throw new Error('Could not load the immutable pull request comparison. Refresh and try again.'); }
+		}
+		await provider.ensureReviewData();
+		if (!reviewMode) {
+			reviewMode = true;
+			await context.workspaceState.update('reviewMode', true);
+			applyReviewMode();
+		}
+		await synchronizeReviewContext?.();
+		const target = currentAiTarget();
+		if (provider !== activePrProvider || pr.pullRequestId !== target?.pr?.pullRequestId || service !== getReviewPrService()
+			|| (initial?.snapshot && initial.identity !== target?.identity)) {
+			throw new Error('The active PR or comparison changed while preparing the review. Start the review again.');
+		}
+		if (!target?.pr || target.filePaths.length === 0) { throw new Error('No changed files are available for the active PR.'); }
+		return options.localChanges || (options.mode && options.mode !== 'vs-target')
+			? { ...target, snapshot: false }
+			: target;
+	}
+
+	async function launchAiReview(options: ReviewStartOptions): Promise<void> {
+		const runId = await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: 'Preparing Copilot review...', cancellable: true },
+			(_progress, token) => copilotReview.start(options, token),
+		);
+		try {
+			await openCopilotReview(runId);
+		} catch (error) {
+			copilotReview.discard(runId);
+			throw error;
+		}
+	}
+
+	function canPublishAiDraft(info: { localOnly?: boolean }): boolean {
+		if (!info.localOnly) { return true; }
+		void vscode.window.showWarningMessage('This draft reviews local changes, not the published PR comparison. Push/update the PR and review its snapshot before posting.');
+		return false;
+	}
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.previewAiFix', (id?: string) => withAiErrors(() => copilotReview.previewFix(id))),
+		vscode.commands.registerCommand('vscode-pr-azdo.applyAiFix', (id?: string) => withAiErrors(() => copilotReview.previewFix(id))),
+	);
 
 	// --- Review Mode ---
 	const requestedReviewWorktreePath = context.globalState.get<string>(REVIEW_WORKTREE_OPEN_KEY);
@@ -360,15 +478,6 @@ export async function activate(context: vscode.ExtensionContext) {
 		if (activePrTreeView) {
 			activePrTreeView.description = reviewMode ? 'reviewing' : '';
 		}
-	}
-
-	function ensureCheckoutForAi(): boolean {
-		const reviewContext = activePrProvider?.reviewContext;
-		if (reviewContext?.mode === 'snapshot' && !reviewContext.checkoutBacked) {
-			vscode.window.showErrorMessage(AI_CHECKOUT_REQUIRED_MESSAGE);
-			return false;
-		}
-		return true;
 	}
 
 	async function pinPullRequestSnapshot(
@@ -519,6 +628,12 @@ export async function activate(context: vscode.ExtensionContext) {
 				externalRemoteInfo,
 				ownsApiClient,
 				checkoutBacked,
+				contents: snapshot.contents,
+				originalPaths: new Map(snapshot.changes.flatMap(change => {
+					const path = change.item?.path?.replace(/^\//, '');
+					const original = (change as { originalPath?: string }).originalPath?.replace(/^\//, '');
+					return path && original ? [[path, original] as const] : [];
+				})),
 			};
 			if (previousExternalClient && previousExternalClient !== externalApiClient) {
 				previousExternalClient.dispose();
@@ -737,6 +852,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Git ref content provider for diff views
 	const gitContentProvider = new GitRefContentProvider(outputChannel, gitApi, detector);
+	gitContentProvider.setDraftContentReader(uri => commentController.getAiDraftContent(uri));
 	context.subscriptions.push(
 		vscode.workspace.registerTextDocumentContentProvider(GIT_CONTENT_SCHEME, gitContentProvider),
 	);
@@ -804,8 +920,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 		});
 
-		activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
-			void (async () => {
+		const synchronize = async () => {
 				const externalApiClient = pinnedSnapshotReview?.externalApiClient;
 				const uid = externalApiClient
 					? await externalApiClient.getCurrentUserId().catch(() => undefined)
@@ -842,7 +957,12 @@ export async function activate(context: vscode.ExtensionContext) {
 					const saved = context.workspaceState.get<PersistedDrafts>(`${DRAFT_STATE_KEY}-${reviewScope}`);
 					if (saved) { commentController.restoreDrafts(saved); }
 				}
-			})();
+		};
+		synchronizeReviewContext = synchronize;
+		activePrCommentSub = activePrProvider.onDidUpdateComments(() => {
+			void synchronize().catch(error => {
+				outputChannel.appendLine(`[comments] Context synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
+			});
 		});
 	}
 
@@ -1353,10 +1473,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// Navigate to a comment in the file
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number) => {
+		vscode.commands.registerCommand('vscode-pr-azdo.goToComment', async (filePath: string, line: number, draftUri?: vscode.Uri) => {
 			const repoRoot = getActiveRepository(gitApi, detector)?.rootUri;
 
 			const pos = new vscode.Position(Math.max(0, line - 1), 0);
+			if (draftUri) {
+				const doc = await vscode.workspace.openTextDocument(draftUri);
+				const editor = await vscode.window.showTextDocument(doc, { preview: false });
+				editor.selection = new vscode.Selection(pos, pos);
+				editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+				return;
+			}
 
 			// Deleted files have no working copy — open the old content from the
 			// target branch as a single read-only editor (a diff view stacks
@@ -1504,6 +1631,7 @@ export async function activate(context: vscode.ExtensionContext) {
 					vscode.window.showWarningMessage('No active PR context.');
 					return;
 				}
+				if (!canPublishAiDraft(info)) { return; }
 				const prId = activePrProvider._activePrForContext.pullRequestId;
 				const body = reply.text.trim() || info.body;
 				try {
@@ -1512,9 +1640,10 @@ export async function activate(context: vscode.ExtensionContext) {
 						filePath: `/${info.filePath}`,
 						startLine: info.line,
 						startCol: 1,
-						endLine: info.line,
+						endLine: info.endLine ?? info.line,
 						endCol: 1,
-					}, ...commentController.getThreadIterationContext(info.filePath));
+						side: info.side,
+					}, info.changeTrackingId, info.iterationId, info.compareToIterationId);
 					commentController.disposeDraft(reply.thread);
 					vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 					activePrProvider.refresh();
@@ -1654,9 +1783,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	registerStatusCommand('vscode-pr-azdo.reactivateThread', CommentThreadStatus.Active);
 
 	// --- AI: Resolve with Copilot button ---
-	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.resolveWithAI', async (threadOrItem: unknown) => {
-			if (!ensureCheckoutForAi()) { return; }
+	async function resolveWithCopilot(threadOrItem: unknown, kind: 'fix' | 'explain'): Promise<void> {
+			const prId = activePrProvider?._activePrForContext?.pullRequestId;
+			const service = getReviewPrService();
 			// Resolve the vscode.CommentThread from the argument
 			let vsThread: vscode.CommentThread | undefined;
 			const arg = threadOrItem as any;
@@ -1684,21 +1813,32 @@ export async function activate(context: vscode.ExtensionContext) {
 			const endCol = originalContext?.endCol ?? azdoThread.threadContext?.rightFileEnd?.offset ?? azdoThread.threadContext?.leftFileEnd?.offset ?? startCol;
 			const relativePath = filePath?.startsWith('/') ? filePath.substring(1) : (filePath ?? '');
 
-			// Store context for the chat participant to pick up
-			prContextProvider.setCommentContext({
+			const comment = {
 				thread: azdoThread,
 				filePath: relativePath,
 				startLine,
 				startCol,
 				endLine,
 				endCol,
-			});
+			};
+			await prepareAiTarget({ kind });
+			if (prId !== activePrProvider?._activePrForContext?.pullRequestId || service !== getReviewPrService()) {
+				throw new Error('The active PR changed while preparing comment resolution. Try again.');
+			}
+			prContextProvider.setCommentContext(comment);
 
 			outputChannel.appendLine(`[ai] Resolve with AI: thread=${azdoThread.id}, file=${relativePath} L${startLine}:${startCol}-L${endLine}:${endCol}`);
 
-			// Open Copilot Chat with @azdo-pr /fix pre-filled
-			await openPrChat('@azdo-pr /fix');
-		}),
+			await launchAiReview({
+				kind, comment,
+				commentCommit: prContextProvider.resolveCommentCommit(azdoThread),
+			});
+	}
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.resolveWithAI', (threadOrItem: unknown) =>
+			withAiErrors(() => resolveWithCopilot(threadOrItem, 'fix'))),
+		vscode.commands.registerCommand('vscode-pr-azdo.explainWithAI', (threadOrItem: unknown) =>
+			withAiErrors(() => resolveWithCopilot(threadOrItem, 'explain'))),
 	);
 
 	// --- AI: Post reply from chat ---
@@ -1757,36 +1897,28 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
-	// --- AI: Apply suggestion via Copilot Edits ---
+	// --- AI: Preview a proposed fix before applying it ---
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.applySuggestion', async () => {
-			if (!ensureCheckoutForAi()) { return; }
-			outputChannel.appendLine('[ai] Opening Copilot Edits to apply suggestion');
-			await vscode.commands.executeCommand('workbench.action.chat.open', {
-				query: 'Apply the suggestion',
-			});
-		}),
+		vscode.commands.registerCommand('vscode-pr-azdo.applySuggestion', () =>
+			withAiErrors(() => copilotReview.previewFix())),
 	);
 
 	// --- AI: Review PR from sidebar button ---
-	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', async () => {
-			if (!ensureCheckoutForAi()) { return; }
-			const lens = await reviewLensService.chooseLens();
-			if (!lens) {
-				outputChannel.appendLine('[ai] reviewWithAI: user cancelled lens selection');
+	async function reviewWithCopilot(kind: 'review' | 'quick'): Promise<void> {
+			const identity = currentAiTarget()?.identity;
+			const lens = kind === 'review' ? await reviewLensService.chooseLens() : undefined;
+			if (kind === 'review' && !lens) { return; }
+			if (currentAiTarget()?.identity !== identity) { throw new Error('The active review changed while choosing a lens. Start the review again.'); }
+			const comparison = activePrProvider?.reviewContext;
+			if (comparison?.mode === 'snapshot'
+				&& (!comparison.checkoutBacked || comparison.compareToIterationId
+					|| comparison.iterationId !== comparison.latestIterationId)) {
+				await launchAiReview({ kind, lensId: lens?.id, mode: 'vs-target' });
 				return;
 			}
-			if (activePrProvider?.isSnapshotReview) {
-				outputChannel.appendLine(`[ai] reviewWithAI: reviewing pinned PR snapshot with lens=${lens.id}`);
-				await openPrChat(buildReviewChatQuery(lens.id, 'vs-target'));
-				return;
-			}
-			outputChannel.appendLine('[ai] reviewWithAI: detecting git state…');
 			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
-				outputChannel.appendLine('[ai] reviewWithAI: no git repo found');
-				await openPrChat(buildReviewChatQuery(lens.id));
+				await launchAiReview({ kind, lensId: lens?.id });
 				return;
 			}
 
@@ -1798,9 +1930,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			const options = getReviewOptions(state, targetBranch, outputChannel);
 
 			if (!options) {
-				// Scenario 1: clean + pushed → auto-proceed
-				outputChannel.appendLine('[ai] reviewWithAI: clean+pushed → opening review with vs-target');
-				await openPrChat(buildReviewChatQuery(lens.id, 'vs-target'));
+				await launchAiReview({ kind, lensId: lens?.id, mode: 'vs-target' });
 				return;
 			}
 
@@ -1813,9 +1943,15 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			outputChannel.appendLine(`[ai] reviewWithAI: lens=${lens.id}, mode=${picked.reviewMode}`);
-			await openPrChat(buildReviewChatQuery(lens.id, picked.reviewMode));
-		}),
+			if (currentAiTarget()?.identity !== identity) { throw new Error('The active review changed while choosing a scope. Start the review again.'); }
+			await launchAiReview({
+				kind, lensId: lens?.id, mode: picked.reviewMode,
+				localChanges: state.hasStagedChanges || state.hasUnstagedChanges || state.hasUnpushedCommits,
+			});
+	}
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-pr-azdo.reviewWithAI', () => withAiErrors(() => reviewWithCopilot('review'))),
+		vscode.commands.registerCommand('vscode-pr-azdo.quickReviewWithAI', () => withAiErrors(() => reviewWithCopilot('quick'))),
 	);
 
 	context.subscriptions.push(
@@ -1844,7 +1980,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				'',
 				'---',
 				'',
-				'## /fix — Resolve PR Comments',
+				'## Resolve with Copilot',
 				'',
 				'```',
 				DEFAULT_SYSTEM_PROMPT,
@@ -1852,7 +1988,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				'',
 				'---',
 				'',
-				'## /review — Structured Review Protocol',
+				'## Review with Copilot — Structured Tool Protocol',
 				'',
 				'```',
 				REVIEW_PROTOCOL_PROMPT,
@@ -1866,7 +2002,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				'',
 				'---',
 				'',
-				'## /review-quick — Quick Summary',
+				'## Quick Review with Copilot',
 				'',
 				'```',
 				DEFAULT_REVIEW_QUICK_PROMPT,
@@ -1902,6 +2038,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('Cannot read draft info.');
 				return;
 			}
+			if (!canPublishAiDraft(info)) { return; }
 
 			const prId = activePrProvider._activePrForContext.pullRequestId;
 			try {
@@ -1910,9 +2047,10 @@ export async function activate(context: vscode.ExtensionContext) {
 					filePath: `/${info.filePath}`,
 					startLine: info.line,
 					startCol: 1,
-					endLine: info.line,
+					endLine: info.endLine ?? info.line,
 					endCol: 1,
-				}, ...commentController.getThreadIterationContext(info.filePath));
+					side: info.side,
+				}, info.changeTrackingId, info.iterationId, info.compareToIterationId);
 				commentController.disposeDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2109,6 +2247,11 @@ export async function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
+			if (commentController.isDraft(reply.thread)) {
+				commentController.updateAiDraft(reply.thread, text);
+				return;
+			}
+
 			const threadId = commentController.getThreadId(reply.thread);
 			if (threadId) {
 				// Existing AzDO thread → save reply as draft on this thread
@@ -2198,6 +2341,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('Cannot read draft info.');
 				return;
 			}
+			if (!canPublishAiDraft(info)) { return; }
 
 			// Read the (possibly edited) body from the comment argument
 			const editedBody = typeof comment.body === 'string'
@@ -2211,9 +2355,10 @@ export async function activate(context: vscode.ExtensionContext) {
 					filePath: `/${info.filePath}`,
 					startLine: info.line,
 					startCol: 1,
-					endLine: info.line,
+					endLine: info.endLine ?? info.line,
 					endCol: 1,
-				}, ...commentController.getThreadIterationContext(info.filePath));
+					side: info.side,
+				}, info.changeTrackingId, info.iterationId, info.compareToIterationId);
 				commentController.disposeDraft(vsThread);
 				vscode.window.showInformationMessage('Comment posted to Azure DevOps.');
 				activePrProvider.refresh();
@@ -2851,7 +2996,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 						outputChannel.appendLine(`[create-pr] Fetching diff and commit log against ${targetRef}`);
 						const [diffOutput, commitLog] = await Promise.all([
-							runGitDiff(cwd, targetRef, []).catch(e => { outputChannel.appendLine(`[create-pr] Diff failed: ${e}`); return ''; }),
+							gitText(cwd, ['diff', '--no-ext-diff', '--no-textconv', targetRef]).catch(e => { outputChannel.appendLine(`[create-pr] Diff failed: ${e}`); return ''; }),
 							getCommitLog(cwd, targetRef).catch(e => { outputChannel.appendLine(`[create-pr] Commit log failed: ${e}`); return ''; }),
 						]);
 						outputChannel.appendLine(`[create-pr] Diff: ${diffOutput.length} chars, Commits: ${commitLog.split('\n').length} lines`);
@@ -2993,7 +3138,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// --- Standalone AI Review (no active PR needed) ---
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-pr-azdo.standaloneReview', async () => {
+		vscode.commands.registerCommand('vscode-pr-azdo.standaloneReview', () => withAiErrors(async () => {
 			const repo = getActiveRepository(gitApi, detector);
 			if (!repo) {
 				vscode.window.showWarningMessage('No git repository found.');
@@ -3036,7 +3181,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			if (!options) {
 				// Scenario 1: clean + pushed → auto-proceed
 				outputChannel.appendLine(`[ext] standaloneReview: clean+pushed → opening review-branch with vs-target`);
-				await openPrChat(`@azdo-pr /review-branch ${targetBranch} --mode=vs-target`);
+				await launchAiReview({ targetBranch, mode: 'vs-target' });
 				return;
 			}
 
@@ -3050,8 +3195,8 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 
 			outputChannel.appendLine(`[ext] standaloneReview: user selected mode=${picked.reviewMode}`);
-			await openPrChat(`@azdo-pr /review-branch ${targetBranch} --mode=${picked.reviewMode}`);
-		}),
+			await launchAiReview({ targetBranch, mode: picked.reviewMode });
+		})),
 	);
 
 	// Sign-in command — triggers interactive login via full connection flow
@@ -3205,10 +3350,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				void runner.runLiveTests(context.extensionUri.fsPath);
 			}, 0);
 		}
+		if (process.env.AZDO_COPILOT_SMOKE === '1' && process.env.AZDO_COPILOT_SMOKE_RESULT) {
+			setTimeout(() => {
+				const runner = require(vscode.Uri.joinPath(context.extensionUri, 'out', 'test', 'live', 'copilotReview.smoke.js').fsPath) as typeof import('./test/live/copilotReview.smoke');
+				void runner.runCopilotSmoke();
+			}, 0);
+		}
 		return {
 			get activePrProvider() { return activePrProvider; },
 			commentController,
 			contextProvider: prContextProvider,
+			copilotReview,
 		} satisfies DevelopmentReviewApi;
 	}
 	return undefined;

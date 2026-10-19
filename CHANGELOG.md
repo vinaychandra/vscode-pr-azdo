@@ -6,6 +6,23 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+### Changed
+
+- AI reviews and comment resolution now use the Copilot harness with a bundled, tool-restricted Azure DevOps Review agent instead of the Local-only `@azdo-pr` participant. Review lenses, local Git scopes, standalone reviews, quick summaries, and comment explanations remain available without changing the user's default harness or global tool selection.
+- AI findings and replies return through structured tools as editable local drafts. Publishing, voting, and thread-resolution tools are deliberately not exposed to the agent.
+
+### Added
+
+- Exact-commit AI reads, directory browsing, and scoped text search for no-checkout and repository-free reviews.
+- User-approved code-fix previews with exact-match, changed-file, repository-boundary, and stale-review checks.
+- Review-run isolation, retry deduplication, paginated context tools, and focused tests on VS Code 1.142.0.
+- An opt-in real Copilot smoke test against a synthetic local repository with no remotes, verifying generated native drafts and unchanged Git state without pushes or Azure DevOps writes.
+
+### Fixed
+
+- AI draft sides, multiline ranges, change-tracking IDs, source/base revisions, and iteration comparisons now survive publishing, iteration changes, and persistence. Draft navigation opens the captured revision.
+- Local-change AI drafts use frozen code snapshots and cannot be accidentally published against unrelated server-side PR lines.
+
 ## [0.0.17] - 2026-10-06
 
 ### Added

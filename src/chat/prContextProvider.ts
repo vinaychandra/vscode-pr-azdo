@@ -21,8 +21,8 @@ export interface CommentContext {
 }
 
 /**
- * In-memory store that bridges the comment thread button click
- * and the Chat Participant handler.
+ * Tracks the active PR and resolves historical comment context.
+ * Copilot runs capture this context rather than reading a mutable active thread.
  */
 export class PrContextProvider {
     private _commentContext: CommentContext | undefined;

@@ -206,6 +206,7 @@ export class DraftCommentItem extends vscode.TreeItem {
         public readonly line: number,
         content: string,
         public readonly kind: 'user' | 'ai' | 'reply',
+        uri?: vscode.Uri,
     ) {
         const truncated = content.length > 80 ? content.substring(0, 77) + '…' : content;
         const kindLabel = kind === 'ai' ? '✨ AI Draft' : '📝 Draft';
@@ -218,7 +219,7 @@ export class DraftCommentItem extends vscode.TreeItem {
         this.command = {
             command: 'vscode-pr-azdo.goToComment',
             title: 'Go to Draft',
-            arguments: [filePath, line],
+            arguments: uri ? [filePath, line, uri] : [filePath, line],
         };
     }
 }

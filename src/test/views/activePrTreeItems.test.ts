@@ -12,10 +12,24 @@ import {
     SectionHeaderItem,
     CommitItem,
     CommentThreadItem,
+    DraftCommentItem,
 } from '../../views/activePrTreeItems';
 import { VersionControlChangeType, CommentType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import type { GitPullRequestChange, GitCommitRef, GitPullRequestCommentThread } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import * as vscode from 'vscode';
+
+suite('DraftCommentItem revision navigation', () => {
+    test('opens the captured draft document instead of the currently selected comparison', () => {
+        const uri = vscode.Uri.parse('azdo-pr-ai-review://run/src/app.ts?right');
+        const item = new DraftCommentItem('src/app.ts', 3, 'Review finding', 'ai', uri);
+        assert.deepStrictEqual(item.command?.arguments, ['src/app.ts', 3, uri]);
+    });
+
+    test('preserves path-based navigation for ordinary drafts', () => {
+        const item = new DraftCommentItem('src/app.ts', 3, 'User comment', 'user');
+        assert.deepStrictEqual(item.command?.arguments, ['src/app.ts', 3]);
+    });
+});
 
 // Helper to create a fake change
 function makeChange(path: string, changeType: VersionControlChangeType = VersionControlChangeType.Edit): GitPullRequestChange {

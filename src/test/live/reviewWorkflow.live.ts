@@ -69,13 +69,33 @@ suite('Live review workflow', () => {
             const originalCommit = api.contextProvider.sourceRef!;
             assert.notStrictEqual(originalCommit, fixture.sourceCommit);
             const aiBody = `${fixture.runId}: AI draft on historical iteration`;
-            const draft = api.commentController.createDraftThread(fixture.filePath.slice(1), 3, aiBody, 'issue');
+            const runId = await api.copilotReview.start();
+            const createDraft = api.commentController.createDraftThread.bind(api.commentController);
+            let draft: vscode.CommentThread | undefined;
+            api.commentController.createDraftThread = (...args) => {
+                const created = createDraft(...args);
+                if (args[2] === aiBody) { draft = created; }
+                return created;
+            };
+            try {
+                const finding = { path: fixture.filePath.slice(1), line: 3, body: aiBody, type: 'issue' as const };
+                assert.deepStrictEqual(
+                    await api.copilotReview.createDrafts(runId, [finding], new vscode.CancellationTokenSource().token),
+                    { created: 1, alreadyCreated: 0, published: false },
+                );
+                assert.deepStrictEqual(
+                    await api.copilotReview.createDrafts(runId, [finding], new vscode.CancellationTokenSource().token),
+                    { created: 0, alreadyCreated: 1, published: false },
+                );
+            } finally {
+                api.commentController.createDraftThread = createDraft;
+            }
             assert.ok(draft);
             await vscode.commands.executeCommand('vscode-pr-azdo.postDraft', draft);
             const historical = await fixture.findThread(aiBody, 1, 0);
             assertIteration(historical, 1, 0);
             assert.strictEqual(historical.threadContext?.rightFileStart?.line, 3);
-            fixture.record('AI draft posting preserves historical iteration metadata');
+            fixture.record('Structured Copilot findings are deduplicated and publish with historical iteration metadata');
 
             await vscode.commands.executeCommand('vscode-pr-azdo.selectIteration', [2]);
             await synchronizeReview();

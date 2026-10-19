@@ -55,6 +55,44 @@ suite('PullRequestService - getPrThreads', () => {
     });
 });
 
+suite('PullRequestService - strict AI snapshot reads', () => {
+    test('rejects unavailable files instead of returning success-shaped empty content', async () => {
+        const service = createService({ getItemsBatch: async () => [[]] });
+        await assert.rejects(service.getFileContents([{ path: 'missing.ts', commitId: 'source' }], true), /unavailable/);
+        assert.strictEqual((await service.getFileContents([{ path: 'missing.ts', commitId: 'source' }])).get('source:missing.ts'), '');
+    });
+
+    test('rejects a missing downloaded blob', async () => {
+        const zip = await new JSZip().generateAsync({ type: 'nodebuffer' });
+        const service = createService({
+            getItemsBatch: async () => [[{ objectId: 'missing-blob' }]],
+            getBlobsZip: async () => Readable.from(zip),
+        });
+        await assert.rejects(service.getFileContents([{ path: 'app.ts', commitId: 'source' }], true), /unavailable/);
+    });
+
+    test('lists only directory children at the exact commit and configured repository', async () => {
+        const calls: unknown[][] = [];
+        const service = createService({
+            getItems: async (...args: unknown[]) => {
+                calls.push(args);
+                return [
+                    { path: '/src', isFolder: true },
+                    { path: '/src/app.ts', isFolder: false },
+                    { path: '/src/child', isFolder: true },
+                ];
+            },
+        });
+        assert.deepStrictEqual(await service.listFiles('source-sha', 'src'), [
+            { path: 'src/app.ts', directory: false }, { path: 'src/child', directory: true },
+        ]);
+        assert.deepStrictEqual(calls, [[
+            'repo', 'project', '/src', VersionControlRecursionType.OneLevel,
+            false, false, false, false, { version: 'source-sha', versionType: GitVersionType.Commit },
+        ]]);
+    });
+});
+
 suite('PullRequestService — getFileContents', () => {
     test('resolves all path versions and downloads their blobs in two API calls', async () => {
         const zip = new JSZip();

@@ -3,7 +3,7 @@ import type { GitPullRequestCommentThread, Comment as AzDoComment, CommentTracki
 import { CommentType, CommentThreadStatus, VersionControlChangeType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { hasSuggestion, extractSuggestion, extractCommentText, renderSuggestionAsDiff } from './suggestionRenderer';
 import type { PullRequestService } from '../azdo/prService';
-import { GIT_CONTENT_SCHEME, buildGitRefUri } from './gitRefContentProvider';
+import { AI_REVIEW_CONTENT_SCHEME, GIT_CONTENT_SCHEME, buildGitRefUri } from './gitRefContentProvider';
 import type { API } from '../typings/git';
 import type { RepositoryDetector } from '../azdo/repositoryDetector';
 import { getActiveRepository } from '../git/gitExtension';
@@ -31,6 +31,7 @@ export class PrCommentController implements vscode.Disposable {
 
     /** AI-generated draft comment threads (local only, not posted to AzDO). */
     private _draftThreads: vscode.CommentThread[] = [];
+    private readonly _aiDraftContexts = new WeakMap<vscode.CommentThread, AiDraftContext>();
 
     /** User-authored draft comment threads (local only, posted on explicit publish). */
     private _userDraftThreads: vscode.CommentThread[] = [];
@@ -391,6 +392,9 @@ export class PrCommentController implements vscode.Disposable {
         }
         if (uri.scheme === GIT_CONTENT_SCHEME) {
             return extractPathFromGitRefUri(uri);
+        }
+        if (uri.scheme === AI_REVIEW_CONTENT_SCHEME) {
+            return uri.path.replace(/^\//, '');
         }
         return undefined;
     }
@@ -989,10 +993,13 @@ export class PrCommentController implements vscode.Disposable {
      * Create a draft comment thread (AI review suggestion, local only).
      * The thread is styled differently and tracked separately from real AzDO threads.
      */
-    createDraftThread(filePath: string, line: number, commentBody: string, type?: string): vscode.CommentThread | undefined {
-        const fileUri = this.getReviewFileUri(filePath);
+    createDraftThread(filePath: string, line: number, commentBody: string, type?: string, options: AiDraftContext = {}): vscode.CommentThread | undefined {
+        const side = options.side ?? (this.isDeletedFile(filePath) ? 'left' : 'right');
+        const ref = side === 'left' ? options.targetRef : options.sourceRef;
+        const fileUri = options.documentUri ? vscode.Uri.parse(options.documentUri)
+            : ref ? buildGitRefUri(filePath, ref) : this.getReviewFileUri(filePath, side);
         if (!fileUri) { return undefined; }
-        const range = new vscode.Range(Math.max(0, line - 1), 0, Math.max(0, line - 1), 0);
+        const range = new vscode.Range(Math.max(0, line - 1), 0, Math.max(0, (options.endLine ?? line) - 1), 0);
 
         const typeLabel = type ? ` (${type})` : '';
         const thread = this._controller.createCommentThread(fileUri, range, [{
@@ -1001,11 +1008,23 @@ export class PrCommentController implements vscode.Disposable {
             author: { name: `AI Review${typeLabel}` },
         }]);
         thread.canReply = true;
-        thread.label = '✨ AI Draft';
-        thread.contextValue = 'azdoPrDraft';
+        thread.label = options.localOnly ? '✨ Local AI Draft (not publishable)' : '✨ AI Draft';
+        thread.contextValue = options.localOnly ? 'azdoPrDraft-localOnly' : 'azdoPrDraft';
         thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
 
         this._draftThreads.push(thread);
+        const [changeTrackingId, iterationId, compareToIterationId] = this.getThreadIterationContext(filePath);
+        this._aiDraftContexts.set(thread, {
+            side, endLine: options.endLine ?? line,
+            sourceRef: options.sourceRef ?? this._sourceRef,
+            targetRef: options.targetRef ?? this._targetRef,
+            changeTrackingId: options.changeTrackingId ?? changeTrackingId,
+            iterationId: options.iterationId ?? iterationId,
+            compareToIterationId: options.compareToIterationId ?? compareToIterationId,
+            documentUri: fileUri.toString(),
+            documentContent: options.documentContent,
+            localOnly: options.localOnly,
+        });
         this.log.appendLine(`[comments] Created draft thread on ${filePath} L${line}: ${commentBody.substring(0, 60)}...`);
         this._onDidPerformAction.fire();
         return thread;
@@ -1049,14 +1068,14 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     /** Get info about a draft thread for posting. */
-    getDraftInfo(thread: vscode.CommentThread): { filePath: string; line: number; body: string } | undefined {
+    getDraftInfo(thread: vscode.CommentThread): ({ filePath: string; line: number; body: string } & AiDraftContext) | undefined {
         if (!this.isDraft(thread)) { return undefined; }
         const filePath = this.resolveFilePath(thread.uri);
         if (!filePath) { return undefined; }
         const line = (thread.range?.start.line ?? 0) + 1;
         const body = thread.comments[0]?.body;
         const text = typeof body === 'string' ? body : (body as vscode.MarkdownString)?.value ?? '';
-        return { filePath, line, body: text };
+        return { filePath, line, body: text, ...this._aiDraftContexts.get(thread) };
     }
 
     /**
@@ -1079,13 +1098,13 @@ export class PrCommentController implements vscode.Disposable {
     }
 
     /** Return summaries of all draft threads (AI + user + reply drafts) for tree display. */
-    getDraftSummaries(): { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[] {
-        const result: { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply' }[] = [];
+    getDraftSummaries(): { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply'; uri?: vscode.Uri }[] {
+        const result: { filePath: string; line: number; body: string; kind: 'ai' | 'user' | 'reply'; uri?: vscode.Uri }[] = [];
 
         for (const thread of this._draftThreads) {
             const info = this.getDraftInfo(thread);
             if (info) {
-                result.push({ filePath: info.filePath, line: info.line, body: info.body, kind: 'ai' });
+                result.push({ filePath: info.filePath, line: info.line, body: info.body, kind: 'ai', uri: thread.uri });
             }
         }
 
@@ -1107,6 +1126,21 @@ export class PrCommentController implements vscode.Disposable {
         }
 
         return result;
+    }
+
+    getAiDraftContent(uri: vscode.Uri): string | undefined {
+        const key = uri.toString();
+        for (const thread of this._draftThreads) {
+            if (thread.uri.toString() === key) {
+                const content = this._aiDraftContexts.get(thread)?.documentContent;
+                if (content !== undefined) { return content; }
+            }
+        }
+        for (const snapshot of this._draftsByPr.values()) {
+            const draft = snapshot.aiDrafts.find(draft => draft.documentUri === key && draft.documentContent !== undefined);
+            if (draft) { return draft.documentContent; }
+        }
+        return undefined;
     }
 
     // ------------------------------------------------------------------
@@ -1395,6 +1429,7 @@ export class PrCommentController implements vscode.Disposable {
                 line: info.line,
                 body: info.body,
                 type: typeMatch?.[1],
+                ...this._aiDraftContexts.get(thread),
             });
         }
 
@@ -1441,7 +1476,7 @@ export class PrCommentController implements vscode.Disposable {
     private restoreStandaloneDrafts(data: PersistedDrafts): number {
         let restored = 0;
         for (const d of data.aiDrafts ?? []) {
-            if (this.createDraftThread(d.filePath, d.line, d.body, d.type)) {
+            if (this.createDraftThread(d.filePath, d.line, d.body, d.type, d)) {
                 restored++;
             }
         }
@@ -1492,7 +1527,20 @@ export interface PersistedDrafts {
     replyDrafts: PersistedReplyDraft[];
 }
 
-interface PersistedAiDraft {
+export interface AiDraftContext {
+    side?: 'left' | 'right';
+    endLine?: number;
+    sourceRef?: string;
+    targetRef?: string;
+    changeTrackingId?: number;
+    iterationId?: number;
+    compareToIterationId?: number;
+    documentUri?: string;
+    documentContent?: string;
+    localOnly?: boolean;
+}
+
+interface PersistedAiDraft extends AiDraftContext {
     filePath: string;
     line: number;
     body: string;

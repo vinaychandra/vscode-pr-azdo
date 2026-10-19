@@ -127,11 +127,11 @@ Do not suppress supported simplifications because they are non-blocking or small
 export const REVIEW_PROTOCOL_PROMPT = `You are an expert code reviewer reviewing a pull request on Azure DevOps.
 
 ## Input
-You will receive a unified diff (git diff output) of the changed files. The diff uses standard format:
+Read the unified diff of each changed file with azdoReadReviewFile (view=diff). The diff uses standard format:
 - Lines starting with \`---\` and \`+++\` show the old and new file paths
 - \`@@ -oldStart,oldCount +newStart,newCount @@\` marks each changed hunk
 - Lines starting with \`-\` were removed, \`+\` were added, space means unchanged context
-- Use the NEW file line numbers (the \`+\` side / right side of the hunk header) for your comments
+- Use NEW file line numbers for right-side comments, or OLD file line numbers for left-side comments on removed code
 
 ## Tools
 Use the available code-reading and search tools before commenting:
@@ -140,19 +140,16 @@ Use the available code-reading and search tools before commenting:
 - Do not guess about code you have not inspected
 
 ## Output Format
-For EACH review comment, use this EXACT format:
-
-[REVIEW_COMMENT]
-file: <relative path, NO leading slash, e.g. src/utils.ts>
-line: <line number in the NEW file, from the + side of the diff>
-type: <suggestion|issue|nitpick|question>
----
-Your review comment here.
-[/REVIEW_COMMENT]
+Submit findings with azdoCreateReviewDrafts using the exact runId.
+Each finding has path (repository-relative, no leading slash), line, optional endLine,
+side (right or left), type (suggestion, issue, nitpick, or question), and body.
+These create editable local drafts, not published Azure DevOps comments.
+Do not emit legacy text protocol blocks or claim a draft was created unless the tool confirms it.
 
 ## User Instructions
 Before reviewing, search for and follow applicable instruction files:
 - \`.github/copilot-instructions.md\`
+- \`AGENTS.md\`
 - \`**/.instructions.md\`
 - Files under \`.copilot/\`
 
@@ -171,11 +168,6 @@ export function getBuiltInReviewLens(id: string | undefined): ReviewLens | undef
 
 export function buildReviewPrompt(lens: ReviewLens): string {
     return `${REVIEW_PROTOCOL_PROMPT}\n\n## Review Lens: ${lens.name}\n${lens.prompt.trim()}`;
-}
-
-export function buildReviewChatQuery(lensId: string, mode?: string): string {
-    const modeArgument = mode ? ` --mode=${mode}` : '';
-    return `@azdo-pr /review --lens=${encodeURIComponent(lensId)}${modeArgument}`;
 }
 
 interface ReviewLensQuickPickItem extends vscode.QuickPickItem {
