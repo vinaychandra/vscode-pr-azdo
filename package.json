@@ -870,7 +870,7 @@
     "azure-devops-node-api": "^15.1.2",
     "diff": "^8.0.3",
     "jszip": "^3.10.2",
-    "markdown-it": "^14.3.2"
+    "markdown-it": "^14.3.3"
   },
   "overrides": {
     "diff": "^8.0.3",
